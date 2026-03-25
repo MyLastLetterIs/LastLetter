@@ -1,0 +1,733 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+local dictionaries = {
+    "https://raw.githubusercontent.com/dwyl/english-words/master/words_alpha.txt",
+    "https://raw.githubusercontent.com/powerlanguage/word-lists/master/word-list-raw.txt",
+    "https://raw.githubusercontent.com/jesstess/Scrabble/master/scrabble/sowpods.txt",
+    "https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/en/en_50k.txt",
+    "https://raw.githubusercontent.com/tabatkins/wordle-list/main/words",
+    "https://raw.githubusercontent.com/first20hours/google-10000-english/master/20k.txt",
+    "https://raw.githubusercontent.com/rspeer/wordfreq/master/wordfreq/data/wordlist/wordlist-en.txt"
+}
+
+local WORDS_FILE = "lastletter_full_dict.txt"
+local CUSTOM_WORDS_FILE = "lastletter_custom_words.txt"
+
+local Words = {}
+local WordSet = {}
+local CustomWordSet = {}
+local PrefixBuckets1 = {}
+local PrefixBuckets2 = {}
+local SuggestionCache = {}
+local TrapCache = {}
+local SuffixCountCache = {}
+
+local ManualTrap2 = {
+    ["bs"] = true,
+    ["ez"] = true,
+    ["ff"] = true,
+    ["ft"] = true,
+    ["hm"] = true,
+    ["hs"] = true,
+    ["ht"] = true,
+    ["ie"] = true,
+    ["ii"] = true,
+    ["ks"] = true,
+    ["ld"] = true,
+    ["lm"] = true,
+    ["ls"] = true,
+    ["lt"] = true,
+    ["nd"] = true,
+    ["nn"] = true,
+    ["ns"] = true,
+    ["rf"] = true,
+    ["rl"] = true,
+    ["rm"] = true,
+    ["rp"] = true,
+    ["rs"] = true,
+    ["rt"] = true,
+    ["ue"] = true,
+    ["vy"] = true,
+    ["yl"] = true
+}
+
+local ManualTrap3 = {
+    ["amh"] = true,
+    ["anz"] = true,
+    ["iga"] = true,
+    ["keh"] = true,
+    ["kup"] = true,
+    ["rua"] = true
+}
+
+local function AddToBucket(bucket, key, word)
+    bucket[key] = bucket[key] or {}
+    table.insert(bucket[key], word)
+end
+
+local function AddWordToBuckets(word, isCustom)
+    word = tostring(word or ""):lower():gsub("%s+", "")
+    if #word < 3 then
+        return
+    end
+
+    if not WordSet[word] then
+        WordSet[word] = true
+        table.insert(Words, word)
+
+        local first = word:sub(1, 1)
+        if first ~= "" then
+            AddToBucket(PrefixBuckets1, first, word)
+        end
+
+        local second = word:sub(1, 2)
+        if #second == 2 then
+            AddToBucket(PrefixBuckets2, second, word)
+        end
+    end
+
+    if isCustom then
+        CustomWordSet[word] = true
+    end
+end
+
+local function CountCustomWords()
+    local c = 0
+    for _ in pairs(CustomWordSet) do
+        c = c + 1
+    end
+    return c
+end
+
+local function ClearCaches()
+    SuggestionCache = {}
+    TrapCache = {}
+    SuffixCountCache = {}
+end
+
+local function LoadDictionaries()
+    if isfile(WORDS_FILE) then
+        local content = readfile(WORDS_FILE)
+        for word in content:gmatch("%S+") do
+            AddWordToBuckets(word, false)
+        end
+        print("Loaded " .. #Words .. " words from cache")
+        return
+    end
+
+    local allText = ""
+    for _, url in ipairs(dictionaries) do
+        local success, resp = pcall(function()
+            return HttpService:RequestAsync({ Url = url, Method = "GET" })
+        end)
+        if success and resp and resp.Success and resp.Body then
+            allText = allText .. "\n" .. resp.Body
+            print("Fetched: " .. url)
+        end
+        task.wait(0.6)
+    end
+
+    if allText ~= "" then
+        writefile(WORDS_FILE, allText)
+        for word in allText:gmatch("%S+") do
+            AddWordToBuckets(word, false)
+        end
+        print("Combined dictionary: " .. #Words .. " words")
+    end
+end
+
+local function LoadCustomWords()
+    if not isfile(CUSTOM_WORDS_FILE) then
+        return
+    end
+
+    local content = readfile(CUSTOM_WORDS_FILE)
+    for word in content:gmatch("%S+") do
+        AddWordToBuckets(word, true)
+    end
+
+    ClearCaches()
+    print("Loaded custom words: " .. tostring(CountCustomWords()))
+end
+
+local function SaveCustomWords()
+    local list = {}
+    for word in pairs(CustomWordSet) do
+        table.insert(list, word)
+    end
+    table.sort(list)
+    writefile(CUSTOM_WORDS_FILE, table.concat(list, "\n"))
+end
+
+LoadDictionaries()
+LoadCustomWords()
+
+do
+    local saved = false
+
+    local function SaveOnce()
+        if saved then
+            return
+        end
+        saved = true
+        pcall(SaveCustomWords)
+    end
+
+    player.AncestryChanged:Connect(function(_, parent)
+        if parent == nil then
+            SaveOnce()
+        end
+    end)
+
+    pcall(function()
+        game:BindToClose(function()
+            SaveOnce()
+        end)
+    end)
+end
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "LastLetterOptimizedFullGUI"
+screenGui.ResetOnSpawn = false
+screenGui.IgnoreGuiInset = true
+screenGui.Parent = playerGui
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 410, 0, 260)
+mainFrame.Position = UDim2.new(1, -430, 0.5, -130)
+mainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+mainFrame.BackgroundTransparency = 0.05
+mainFrame.BorderSizePixel = 0
+mainFrame.Parent = screenGui
+
+local mainCorner = Instance.new("UICorner")
+mainCorner.CornerRadius = UDim.new(0, 12)
+mainCorner.Parent = mainFrame
+
+local titleBar = Instance.new("TextLabel")
+titleBar.Size = UDim2.new(1, 0, 0, 40)
+titleBar.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+titleBar.BorderSizePixel = 0
+titleBar.Text = "Last Letter Helper - Optimized Full"
+titleBar.TextColor3 = Color3.new(1, 1, 1)
+titleBar.Font = Enum.Font.GothamBold
+titleBar.TextSize = 18
+titleBar.Active = true
+titleBar.Parent = mainFrame
+
+local titleCorner = Instance.new("UICorner")
+titleCorner.CornerRadius = UDim.new(0, 12)
+titleCorner.Parent = titleBar
+
+local dragging = false
+local dragStart
+local startPos
+
+titleBar.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = mainFrame.Position
+    end
+end)
+
+titleBar.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - dragStart
+        mainFrame.Position = UDim2.new(
+            startPos.X.Scale,
+            startPos.X.Offset + delta.X,
+            startPos.Y.Scale,
+            startPos.Y.Offset + delta.Y
+        )
+    end
+end)
+
+local buttonFrame = Instance.new("Frame")
+buttonFrame.Size = UDim2.new(0, 185, 1, -55)
+buttonFrame.Position = UDim2.new(0, 12, 0, 50)
+buttonFrame.BackgroundTransparency = 1
+buttonFrame.Parent = mainFrame
+
+local buttonLayout = Instance.new("UIListLayout")
+buttonLayout.Padding = UDim.new(0, 9)
+buttonLayout.SortOrder = Enum.SortOrder.LayoutOrder
+buttonLayout.Parent = buttonFrame
+
+local suggestionLabel = Instance.new("TextLabel")
+suggestionLabel.Size = UDim2.new(0, 195, 1, -65)
+suggestionLabel.Position = UDim2.new(0, 205, 0, 52)
+suggestionLabel.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+suggestionLabel.BorderSizePixel = 0
+suggestionLabel.Text = "Turn Suggester or Trap Mode ON"
+suggestionLabel.TextColor3 = Color3.new(1, 1, 1)
+suggestionLabel.Font = Enum.Font.Gotham
+suggestionLabel.TextSize = 15
+suggestionLabel.TextWrapped = true
+suggestionLabel.TextXAlignment = Enum.TextXAlignment.Left
+suggestionLabel.TextYAlignment = Enum.TextYAlignment.Top
+suggestionLabel.Parent = mainFrame
+
+local suggestionCorner = Instance.new("UICorner")
+suggestionCorner.CornerRadius = UDim.new(0, 8)
+suggestionCorner.Parent = suggestionLabel
+
+local suggesterEnabled = false
+local trapModeEnabled = false
+local minLength = 3
+local maxLength = 20
+
+local settingsFrame
+
+local function MakeButton(text)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 0, 42)
+    btn.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+    btn.BorderSizePixel = 0
+    btn.Text = text
+    btn.TextColor3 = Color3.new(1, 1, 1)
+    btn.Font = Enum.Font.GothamSemibold
+    btn.TextSize = 16
+    btn.Parent = buttonFrame
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = btn
+
+    return btn
+end
+
+local suggesterBtn = MakeButton("Suggester: OFF")
+suggesterBtn.MouseButton1Click:Connect(function()
+    suggesterEnabled = not suggesterEnabled
+    suggesterBtn.Text = "Suggester: " .. (suggesterEnabled and "ON" or "OFF")
+    suggesterBtn.BackgroundColor3 = suggesterEnabled and Color3.fromRGB(0, 170, 80) or Color3.fromRGB(40, 40, 50)
+    ClearCaches()
+end)
+
+local trapBtn = MakeButton("Trap Mode: OFF")
+trapBtn.MouseButton1Click:Connect(function()
+    trapModeEnabled = not trapModeEnabled
+    trapBtn.Text = "Trap Mode: " .. (trapModeEnabled and "ON" or "OFF")
+    trapBtn.BackgroundColor3 = trapModeEnabled and Color3.fromRGB(220, 60, 60) or Color3.fromRGB(40, 40, 50)
+    ClearCaches()
+end)
+
+local settingsBtn = MakeButton("Settings")
+
+settingsFrame = Instance.new("Frame")
+settingsFrame.Size = UDim2.new(0, 340, 0, 340)
+settingsFrame.Position = UDim2.new(0.5, -170, 0.5, -170)
+settingsFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+settingsFrame.BorderSizePixel = 0
+settingsFrame.Visible = false
+settingsFrame.Parent = screenGui
+
+local settingsCorner = Instance.new("UICorner")
+settingsCorner.CornerRadius = UDim.new(0, 12)
+settingsCorner.Parent = settingsFrame
+
+local sfTitle = Instance.new("TextLabel")
+sfTitle.Size = UDim2.new(1, 0, 0, 40)
+sfTitle.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+sfTitle.BorderSizePixel = 0
+sfTitle.Text = "Settings"
+sfTitle.TextColor3 = Color3.new(1, 1, 1)
+sfTitle.Font = Enum.Font.GothamBold
+sfTitle.TextSize = 18
+sfTitle.Parent = settingsFrame
+
+local sfTitleCorner = Instance.new("UICorner")
+sfTitleCorner.CornerRadius = UDim.new(0, 12)
+sfTitleCorner.Parent = sfTitle
+
+local closeX = Instance.new("TextButton")
+closeX.Size = UDim2.new(0, 32, 0, 32)
+closeX.Position = UDim2.new(1, -37, 0, 4)
+closeX.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+closeX.BorderSizePixel = 0
+closeX.Text = "X"
+closeX.TextColor3 = Color3.new(1, 1, 1)
+closeX.Font = Enum.Font.GothamBold
+closeX.TextSize = 20
+closeX.Parent = settingsFrame
+
+local closeCorner = Instance.new("UICorner")
+closeCorner.CornerRadius = UDim.new(0, 6)
+closeCorner.Parent = closeX
+
+closeX.MouseButton1Click:Connect(function()
+    settingsFrame.Visible = false
+end)
+
+settingsBtn.MouseButton1Click:Connect(function()
+    settingsFrame.Visible = not settingsFrame.Visible
+end)
+
+local settingsContainer = Instance.new("Frame")
+settingsContainer.Size = UDim2.new(1, -20, 1, -50)
+settingsContainer.Position = UDim2.new(0, 10, 0, 45)
+settingsContainer.BackgroundTransparency = 1
+settingsContainer.Parent = settingsFrame
+
+local settingsLayout = Instance.new("UIListLayout")
+settingsLayout.Padding = UDim.new(0, 8)
+settingsLayout.SortOrder = Enum.SortOrder.LayoutOrder
+settingsLayout.Parent = settingsContainer
+
+local function makeRow(labelText, defaultValue)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, 0, 0, 30)
+    row.BackgroundTransparency = 1
+    row.Parent = settingsContainer
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(0.58, 0, 1, 0)
+    label.BackgroundTransparency = 1
+    label.Text = labelText
+    label.TextColor3 = Color3.new(1, 1, 1)
+    label.Font = Enum.Font.Gotham
+    label.TextSize = 15
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = row
+
+    local box = Instance.new("TextBox")
+    box.Size = UDim2.new(0.4, 0, 1, 0)
+    box.Position = UDim2.new(0.6, 0, 0, 0)
+    box.Text = tostring(defaultValue)
+    box.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+    box.BorderSizePixel = 0
+    box.TextColor3 = Color3.new(1, 1, 1)
+    box.Font = Enum.Font.Gotham
+    box.TextSize = 15
+    box.ClearTextOnFocus = false
+    box.Parent = row
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 6)
+    corner.Parent = box
+
+    return label, box
+end
+
+local minLabel, minBox = makeRow("Min Length:", minLength)
+minBox.FocusLost:Connect(function()
+    local n = tonumber(minBox.Text)
+    if n and n >= 1 then
+        minLength = n
+        ClearCaches()
+    else
+        minBox.Text = tostring(minLength)
+    end
+end)
+
+local maxLabel, maxBox = makeRow("Max Length:", maxLength)
+maxBox.FocusLost:Connect(function()
+    local n = tonumber(maxBox.Text)
+    if n and n >= minLength then
+        maxLength = n
+        ClearCaches()
+    else
+        maxBox.Text = tostring(maxLength)
+    end
+end)
+
+local customLabel = Instance.new("TextLabel")
+customLabel.Size = UDim2.new(1, 0, 0, 30)
+customLabel.BackgroundTransparency = 1
+customLabel.Text = "Add Custom Words"
+customLabel.TextColor3 = Color3.new(1, 1, 1)
+customLabel.Font = Enum.Font.Gotham
+customLabel.TextSize = 15
+customLabel.TextXAlignment = Enum.TextXAlignment.Left
+customLabel.Parent = settingsContainer
+
+local customBox = Instance.new("TextBox")
+customBox.Size = UDim2.new(0.7, 0, 0, 30)
+customBox.Position = UDim2.new(0, 0, 0, 35)
+customBox.PlaceholderText = "word1,word2,word3"
+customBox.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+customBox.BorderSizePixel = 0
+customBox.TextColor3 = Color3.new(1, 1, 1)
+customBox.Font = Enum.Font.Gotham
+customBox.TextSize = 14
+customBox.ClearTextOnFocus = false
+customBox.Parent = customLabel
+
+local customBoxCorner = Instance.new("UICorner")
+customBoxCorner.CornerRadius = UDim.new(0, 6)
+customBoxCorner.Parent = customBox
+
+local addCustomBtn = Instance.new("TextButton")
+addCustomBtn.Size = UDim2.new(0.28, 0, 0, 30)
+addCustomBtn.Position = UDim2.new(0.72, 0, 0, 35)
+addCustomBtn.Text = "Add"
+addCustomBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 80)
+addCustomBtn.BorderSizePixel = 0
+addCustomBtn.TextColor3 = Color3.new(1, 1, 1)
+addCustomBtn.Font = Enum.Font.GothamSemibold
+addCustomBtn.TextSize = 14
+addCustomBtn.Parent = customLabel
+
+local addCustomCorner = Instance.new("UICorner")
+addCustomCorner.CornerRadius = UDim.new(0, 6)
+addCustomCorner.Parent = addCustomBtn
+
+addCustomBtn.MouseButton1Click:Connect(function()
+    local addedAny = false
+
+    for word in customBox.Text:gmatch("([^,]+)") do
+        word = word:lower():gsub("%s+", "")
+        if #word >= 3 and not CustomWordSet[word] then
+            CustomWordSet[word] = true
+            AddWordToBuckets(word, true)
+            addedAny = true
+        end
+    end
+
+    customBox.Text = ""
+    ClearCaches()
+
+    if addedAny then
+        pcall(SaveCustomWords)
+    end
+
+    print("Custom words updated: " .. tostring(CountCustomWords()))
+end)
+
+local function GetCurrentPrefix()
+    local inGame = playerGui:FindFirstChild("InGame")
+    if not inGame then
+        return ""
+    end
+
+    local frame = inGame:FindFirstChild("Frame")
+    if not frame then
+        return ""
+    end
+
+    local container = frame:FindFirstChild("CurrentWord")
+    if not container then
+        return ""
+    end
+
+    local letters = {}
+    for _, child in ipairs(container:GetChildren()) do
+        if child:IsA("GuiObject") and child.Visible then
+            local lbl = child:FindFirstChild("Letter")
+            if lbl and lbl:IsA("TextLabel") and lbl.Text ~= "" then
+                table.insert(letters, { t = lbl.Text, p = child.AbsolutePosition.X })
+            end
+        end
+    end
+
+    table.sort(letters, function(a, b)
+        return a.p < b.p
+    end)
+
+    local prefix = ""
+    for _, letter in ipairs(letters) do
+        prefix = prefix .. letter.t
+    end
+
+    return prefix:lower()
+end
+
+local function GetCandidates(prefix)
+    if prefix == "" then
+        return Words
+    end
+
+    if #prefix >= 2 then
+        return PrefixBuckets2[prefix:sub(1, 2)] or {}
+    end
+
+    return PrefixBuckets1[prefix:sub(1, 1)] or {}
+end
+
+local function PushLimited(list, value, limit)
+    if #list < limit then
+        table.insert(list, value)
+    end
+end
+
+local function GetSuggestions(prefix)
+    if SuggestionCache[prefix] then
+        return SuggestionCache[prefix]
+    end
+
+    local normal = {}
+    local custom = {}
+    local candidates = GetCandidates(prefix)
+
+    for _, word in ipairs(candidates) do
+        if word:sub(1, #prefix) == prefix and #word >= minLength and #word <= maxLength then
+            if CustomWordSet[word] then
+                PushLimited(custom, word, 10)
+            else
+                PushLimited(normal, word, 10)
+            end
+
+            if #normal >= 10 and #custom >= 10 then
+                break
+            end
+        end
+    end
+
+    SuggestionCache[prefix] = {
+        normal = normal,
+        custom = custom,
+    }
+
+    return SuggestionCache[prefix]
+end
+
+local function GetSuffixCount(suffix)
+    if SuffixCountCache[suffix] ~= nil then
+        return SuffixCountCache[suffix]
+    end
+
+    local count = 0
+    local candidates = GetCandidates(suffix)
+
+    for i = 1, math.min(#candidates, 25) do
+        local w = candidates[i]
+        if w:sub(1, #suffix) == suffix then
+            count = count + 1
+        end
+        if count > 6 then
+            break
+        end
+    end
+
+    SuffixCountCache[suffix] = count
+    return count
+end
+
+local function FindTraps(prefix)
+    if TrapCache[prefix] then
+        return TrapCache[prefix]
+    end
+
+    local normal = {}
+    local custom = {}
+    local checkedSuffix = {}
+    local candidates = GetCandidates(prefix)
+
+    for _, word in ipairs(candidates) do
+        if word:sub(1, #prefix) == prefix then
+            local suffix2 = word:sub(-2)
+            local suffix3 = word:sub(-3)
+
+            local function handleSuffix(suffix, isManual)
+                if #suffix >= 2 and not checkedSuffix[suffix] then
+                    checkedSuffix[suffix] = true
+
+                    local isTrap = false
+                    if isManual then
+                        isTrap = true
+                    else
+                        local count = GetSuffixCount(suffix)
+                        if count > 0 and count <= 6 then
+                            isTrap = true
+                        end
+                    end
+
+                    if isTrap then
+                        local text = word .. " -> trap: " .. suffix:upper()
+                        if CustomWordSet[word] then
+                            PushLimited(custom, text, 5)
+                        else
+                            PushLimited(normal, text, 5)
+                        end
+                    end
+                end
+            end
+
+            handleSuffix(suffix3, ManualTrap3[suffix3] == true)
+            handleSuffix(suffix2, ManualTrap2[suffix2] == true)
+
+            if #normal >= 5 and #custom >= 5 then
+                break
+            end
+        end
+    end
+
+    TrapCache[prefix] = {
+        normal = normal,
+        custom = custom,
+    }
+
+    return TrapCache[prefix]
+end
+
+local function BuildSection(title, items, emptyText)
+    local text = title .. "\n"
+    if #items > 0 then
+        text = text .. table.concat(items, "\n")
+    else
+        text = text .. emptyText
+    end
+    return text
+end
+
+local function RefreshSuggestionText(prefix)
+    local blocks = {}
+    table.insert(blocks, "Prefix: " .. prefix:upper())
+
+    local suggestionData = GetSuggestions(prefix)
+
+    if suggesterEnabled then
+        if #suggestionData.custom > 0 then
+            table.insert(blocks, BuildSection("Custom Words:", suggestionData.custom, ""))
+        end
+        table.insert(blocks, BuildSection("Suggestions:", suggestionData.normal, "No matches"))
+    end
+
+    if trapModeEnabled then
+        local trapData = FindTraps(prefix)
+
+        if #trapData.custom > 0 then
+            table.insert(blocks, BuildSection("Custom Words:", trapData.custom, ""))
+        end
+        table.insert(blocks, BuildSection("TRAPS:", trapData.normal, "No strong traps found"))
+    end
+
+    return table.concat(blocks, "\n\n")
+end
+
+local lastPrefix = ""
+local lastCheckTime = 0
+
+RunService.Heartbeat:Connect(function()
+    local now = tick()
+    if now - lastCheckTime < 0.08 then
+        return
+    end
+    lastCheckTime = now
+
+    local prefix = GetCurrentPrefix()
+    if prefix == "" or prefix == lastPrefix then
+        return
+    end
+    lastPrefix = prefix
+
+    local text = RefreshSuggestionText(prefix)
+    if suggestionLabel.Text ~= text then
+        suggestionLabel.Text = text
+    end
+end)
+
+print("Last Letter GUI loaded")
