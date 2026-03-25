@@ -3,17 +3,23 @@ local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local HttpService = game:GetService("HttpService")
 
+if isfile("lastletter_full_dict.txt") then
+    delfile("lastletter_full_dict.txt")
+end
+
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 local dictionaries = {
     "https://raw.githubusercontent.com/dwyl/english-words/master/words_alpha.txt",
-    "https://raw.githubusercontent.com/powerlanguage/word-lists/master/word-list-raw.txt",
-    "https://raw.githubusercontent.com/jesstess/Scrabble/master/scrabble/sowpods.txt",
+    "https://raw.githubusercontent.com/dwyl/english-words/master/words.txt",
+    "https://raw.githubusercontent.com/nlile/dictionary-word-list/master/largest_possible_aspell_wordlist_without_diacritic.txt",
     "https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/en/en_50k.txt",
     "https://raw.githubusercontent.com/tabatkins/wordle-list/main/words",
     "https://raw.githubusercontent.com/first20hours/google-10000-english/master/20k.txt",
-    "https://raw.githubusercontent.com/rspeer/wordfreq/master/wordfreq/data/wordlist/wordlist-en.txt"
+    "https://raw.githubusercontent.com/first20hours/google-10000-english/master/google-10000-english-no-swears.txt",
+    "https://raw.githubusercontent.com/dolph/dictionary/master/enable1.txt",
+    "https://raw.githubusercontent.com/pbevin/lexicon/master/lexicon.txt"
 }
 
 local WORDS_FILE = "lastletter_full_dict.txt"
@@ -137,7 +143,6 @@ local function LoadDictionaries()
         local body = FetchUrl(url)
         if body and #body > 1000 then
             allText = allText .. "\n" .. body
-            print("Loaded: " .. url .. " | Size: " .. tostring(#body))
         else
             warn("Skipped or failed: " .. url)
         end
