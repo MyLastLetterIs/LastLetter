@@ -28,51 +28,44 @@ local SuggestionCache = {}
 local TrapCache = {}
 local SuffixCountCache = {}
 
-local ManualTrap2 = {
-    ["bs"] = true,
-    ["ez"] = true,
-    ["ff"] = true,
-    ["ft"] = true,
-    ["hm"] = true,
-    ["hs"] = true,
-    ["ht"] = true,
-    ["ie"] = true,
-    ["ii"] = true,
-    ["ks"] = true,
-    ["ld"] = true,
-    ["lm"] = true,
-    ["ls"] = true,
-    ["lt"] = true,
-    ["nd"] = true,
-    ["nn"] = true,
-    ["ns"] = true,
-    ["rf"] = true,
-    ["rl"] = true,
-    ["rm"] = true,
-    ["rp"] = true,
-    ["rs"] = true,
-    ["rt"] = true,
-    ["ue"] = true,
-    ["vy"] = true,
-    ["yl"] = true
-}
+local ManualTrap2 = {}
+for _, v in ipairs({
+    "bs","ez","ff","ft","hm","hs","ht","ie","ii","ks","ld","lm","ls","lt","nd","nn","ns","rf","rl","rm","rp","rs","rt","ue","vy","yl"
+}) do
+    ManualTrap2[v] = true
+end
 
-local ManualTrap3 = {
-    ["amh"] = true,
-    ["anz"] = true,
-    ["iga"] = true,
-    ["keh"] = true,
-    ["kup"] = true,
-    ["rua"] = true
-}
+local ManualTrap3 = {}
+for _, v in ipairs({
+    "amh","anz","iga","keh","kup","rua"
+}) do
+    ManualTrap3[v] = true
+end
 
 local function AddToBucket(bucket, key, word)
     bucket[key] = bucket[key] or {}
     table.insert(bucket[key], word)
 end
 
+local function ClearCaches()
+    SuggestionCache = {}
+    TrapCache = {}
+    SuffixCountCache = {}
+end
+
+local function CountCustomWords()
+    local c = 0
+    for _ in pairs(CustomWordSet) do
+        c = c + 1
+    end
+    return c
+end
+
 local function AddWordToBuckets(word, isCustom)
     word = tostring(word or ""):lower():gsub("%s+", "")
+    if not word:match("^[a-z]+$") then
+        return
+    end
     if #word < 3 then
         return
     end
@@ -97,18 +90,26 @@ local function AddWordToBuckets(word, isCustom)
     end
 end
 
-local function CountCustomWords()
-    local c = 0
-    for _ in pairs(CustomWordSet) do
-        c = c + 1
+local function FetchUrl(url)
+    local ok, result = pcall(function()
+        return game:HttpGet(url, true)
+    end)
+    if ok and type(result) == "string" and #result > 0 then
+        return result
     end
-    return c
-end
 
-local function ClearCaches()
-    SuggestionCache = {}
-    TrapCache = {}
-    SuffixCountCache = {}
+    local ok2, resp = pcall(function()
+        return HttpService:RequestAsync({
+            Url = url,
+            Method = "GET"
+        })
+    end)
+
+    if ok2 and resp and resp.Success and type(resp.Body) == "string" and #resp.Body > 0 then
+        return resp.Body
+    end
+
+    return nil
 end
 
 local function LoadDictionaries()
@@ -123,14 +124,14 @@ local function LoadDictionaries()
 
     local allText = ""
     for _, url in ipairs(dictionaries) do
-        local success, resp = pcall(function()
-            return HttpService:RequestAsync({ Url = url, Method = "GET" })
-        end)
-        if success and resp and resp.Success and resp.Body then
-            allText = allText .. "\n" .. resp.Body
-            print("Fetched: " .. url)
+        local body = FetchUrl(url)
+        if body and #body > 1000 then
+            allText = allText .. "\n" .. body
+            print("Loaded: " .. url .. " | Size: " .. tostring(#body))
+        else
+            warn("Skipped or failed: " .. url)
         end
-        task.wait(0.6)
+        task.wait(0.8)
     end
 
     if allText ~= "" then
@@ -140,6 +141,8 @@ local function LoadDictionaries()
         end
         print("Combined dictionary: " .. #Words .. " words")
     end
+
+    print("TOTAL WORDS: " .. #Words)
 end
 
 local function LoadCustomWords()
@@ -729,5 +732,3 @@ RunService.Heartbeat:Connect(function()
         suggestionLabel.Text = text
     end
 end)
-
-print("Last Letter GUI loaded")
