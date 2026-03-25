@@ -7,19 +7,13 @@ local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 local dictionaries = {
-   local dictionaries = {
-    "https://raw.githubusercontent.com/dwyl/english-words/master/words_alpha.txt",        -- ~479k words
-    "https://raw.githubusercontent.com/powerlanguage/word-lists/master/word-list-raw.txt", -- ~58k words
-    "https://raw.githubusercontent.com/jesstess/Scrabble/master/scrabble/sowpods.txt",     -- Scrabble list
-    "https://raw.githubusercontent.com/first20hours/google-10000-english/master/google-10000-english.txt", -- 10k common words
-    "https://raw.githubusercontent.com/dwyl/english-words/master/words.txt",               -- 466k words
-    "https://raw.githubusercontent.com/eneko/data-repository/master/data/words.txt",       -- 450k words
-    "https://raw.githubusercontent.com/first20hours/google-10000-english/master/google-10000-english-no-swears.txt", -- 10k filtered
-    "https://raw.githubusercontent.com/arineng/arin-english/master/words.txt",            -- 140k words
-    "https://raw.githubusercontent.com/dominictarr/words/master/words.txt",               -- 274k words
-    "https://raw.githubusercontent.com/matthewreagan/WebstersEnglishDictionary/master/dictionary.txt", -- Websters ~100k
-    "https://raw.githubusercontent.com/ryanburgess/mobywords/master/mobywords.txt",       -- Moby ~300k
-    "https://raw.githubusercontent.com/eneko/data-repository/master/data/words.txt"       -- SCOWL / large word list
+    "https://raw.githubusercontent.com/dwyl/english-words/master/words_alpha.txt",
+    "https://raw.githubusercontent.com/powerlanguage/word-lists/master/word-list-raw.txt",
+    "https://raw.githubusercontent.com/jesstess/Scrabble/master/scrabble/sowpods.txt",
+    "https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/en/en_50k.txt",
+    "https://raw.githubusercontent.com/tabatkins/wordle-list/main/words",
+    "https://raw.githubusercontent.com/first20hours/google-10000-english/master/20k.txt",
+    "https://raw.githubusercontent.com/rspeer/wordfreq/master/wordfreq/data/wordlist/wordlist-en.txt"
 }
 
 local WORDS_FILE = "lastletter_full_dict.txt"
@@ -70,15 +64,18 @@ end
 local function AddWordToBuckets(word, isCustom)
     word = tostring(word or ""):lower():gsub("%s+", "")
     if not word:match("^[a-z]+$") then
-        return
+        return false
     end
     if #word < 3 then
-        return
+        return false
     end
+
+    local inserted = false
 
     if not WordSet[word] then
         WordSet[word] = true
         table.insert(Words, word)
+        inserted = true
 
         local first = word:sub(1, 1)
         if first ~= "" then
@@ -94,14 +91,16 @@ local function AddWordToBuckets(word, isCustom)
     if isCustom then
         CustomWordSet[word] = true
     end
+
+    return inserted
 end
 
 local function FetchUrl(url)
-    local ok, result = pcall(function()
+    local ok1, body1 = pcall(function()
         return game:HttpGet(url, true)
     end)
-    if ok and type(result) == "string" and #result > 0 then
-        return result
+    if ok1 and type(body1) == "string" and #body1 > 0 then
+        return body1
     end
 
     local ok2, resp = pcall(function()
@@ -119,12 +118,17 @@ local function FetchUrl(url)
 end
 
 local function LoadDictionaries()
+    local loadedUnique = 0
+
     if isfile(WORDS_FILE) then
         local content = readfile(WORDS_FILE)
         for word in content:gmatch("%S+") do
-            AddWordToBuckets(word, false)
+            if AddWordToBuckets(word, false) then
+                loadedUnique = loadedUnique + 1
+            end
         end
-        print("Loaded " .. #Words .. " words from cache")
+        print("Loaded " .. loadedUnique .. " unique words from cache")
+        print("TOTAL UNIQUE WORDS: " .. #Words)
         return
     end
 
@@ -143,12 +147,14 @@ local function LoadDictionaries()
     if allText ~= "" then
         writefile(WORDS_FILE, allText)
         for word in allText:gmatch("%S+") do
-            AddWordToBuckets(word, false)
+            if AddWordToBuckets(word, false) then
+                loadedUnique = loadedUnique + 1
+            end
         end
-        print("Combined dictionary: " .. #Words .. " words")
+        print("Combined unique words: " .. loadedUnique)
     end
 
-    print("TOTAL WORDS: " .. #Words)
+    print("TOTAL UNIQUE WORDS: " .. #Words)
 end
 
 local function LoadCustomWords()
@@ -738,3 +744,5 @@ RunService.Heartbeat:Connect(function()
         suggestionLabel.Text = text
     end
 end)
+
+print("Last Letter GUI loaded")
