@@ -12,8 +12,6 @@ local dictionaries = {
     "https://raw.githubusercontent.com/jesstess/Scrabble/master/scrabble/sowpods.txt",
     "https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/en/en_50k.txt",
     "https://raw.githubusercontent.com/tabatkins/wordle-list/main/words",
-    "https://raw.githubusercontent.com/first20hours/google-10000-english/master/20k.txt",
-    "https://raw.githubusercontent.com/rspeer/wordfreq/master/wordfreq/data/wordlist/wordlist-en.txt"
 }
 
 local WORDS_FILE = "lastletter_full_dict.txt"
