@@ -7,13 +7,19 @@ local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 local dictionaries = {
-    "https://raw.githubusercontent.com/dwyl/english-words/master/words_alpha.txt",
-    "https://raw.githubusercontent.com/powerlanguage/word-lists/master/word-list-raw.txt",
-"https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/en/en_50k.txt",
-    "https://raw.githubusercontent.com/tabatkins/wordle-list/main/words",
-    "https://raw.githubusercontent.com/first20hours/google-10000-english/master/20k.txt",
-    "https://raw.githubusercontent.com/rspeer/wordfreq/master/wordfreq/data/wordlist/wordlist-en.txt"
-
+   local dictionaries = {
+    "https://raw.githubusercontent.com/dwyl/english-words/master/words_alpha.txt",        -- ~479k words
+    "https://raw.githubusercontent.com/powerlanguage/word-lists/master/word-list-raw.txt", -- ~58k words
+    "https://raw.githubusercontent.com/jesstess/Scrabble/master/scrabble/sowpods.txt",     -- Scrabble list
+    "https://raw.githubusercontent.com/first20hours/google-10000-english/master/google-10000-english.txt", -- 10k common words
+    "https://raw.githubusercontent.com/dwyl/english-words/master/words.txt",               -- 466k words
+    "https://raw.githubusercontent.com/eneko/data-repository/master/data/words.txt",       -- 450k words
+    "https://raw.githubusercontent.com/first20hours/google-10000-english/master/google-10000-english-no-swears.txt", -- 10k filtered
+    "https://raw.githubusercontent.com/arineng/arin-english/master/words.txt",            -- 140k words
+    "https://raw.githubusercontent.com/dominictarr/words/master/words.txt",               -- 274k words
+    "https://raw.githubusercontent.com/matthewreagan/WebstersEnglishDictionary/master/dictionary.txt", -- Websters ~100k
+    "https://raw.githubusercontent.com/ryanburgess/mobywords/master/mobywords.txt",       -- Moby ~300k
+    "https://raw.githubusercontent.com/eneko/data-repository/master/data/words.txt"       -- SCOWL / large word list
 }
 
 local WORDS_FILE = "lastletter_full_dict.txt"
