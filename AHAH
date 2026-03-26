@@ -704,3 +704,39 @@ local function BuildSection(title, items, emptyText)
     return text
 end
   
+local lastPrefix = ""
+local lastUpdate = 0
+
+RunService.Heartbeat:Connect(function()
+    local now = tick()
+    if now - lastUpdate < 0.1 then return end
+    lastUpdate = now
+
+    local prefix = GetCurrentPrefix()
+    if prefix == lastPrefix or prefix == "" then return end
+    lastPrefix = prefix
+
+    local text = "Prefix: " .. prefix:upper() .. "\n\n"
+
+    if suggesterEnabled then
+        local data = GetSuggestions(prefix)
+
+        if #data.custom > 0 then
+            text = text .. BuildSection("Custom Words:", data.custom, "") .. "\n\n"
+        end
+
+        text = text .. BuildSection("Suggestions:", data.normal, "No matches") .. "\n\n"
+    end
+
+    if trapModeEnabled then
+        local data = FindTraps(prefix)
+
+        if #data.custom > 0 then
+            text = text .. BuildSection("Custom Traps:", data.custom, "") .. "\n\n"
+        end
+
+        text = text .. BuildSection("Traps:", data.normal, "No traps")
+    end
+
+    suggestionLabel.Text = text
+end)
