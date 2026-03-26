@@ -19,6 +19,7 @@ local dictionaries = {
     "https://raw.githubusercontent.com/first20hours/google-10000-english/master/20k.txt",
     "https://raw.githubusercontent.com/first20hours/google-10000-english/master/google-10000-english-no-swears.txt",
     "https://raw.githubusercontent.com/dolph/dictionary/master/enable1.txt",
+    "https://raw.githubusercontent.com/pbevin/lexicon/master/lexicon.txt",
     "https://scrapmaker.com/data/wordlists/dictionaries/webster-dictionary.txt"
 }
 
@@ -655,7 +656,7 @@ local function FindTraps(prefix)
                 if #suffix >= 2 and not checkedSuffix[suffix] then
                     checkedSuffix[suffix] = true
 
-                    local isTrap = false
+local isTrap = false
                     if isManual then
                         isTrap = true
                     else
@@ -692,62 +693,3 @@ local function FindTraps(prefix)
 
     return TrapCache[prefix]
 end
-
-local function BuildSection(title, items, emptyText)
-    local text = title .. "\n"
-    if #items > 0 then
-        text = text .. table.concat(items, "\n")
-    else
-        text = text .. emptyText
-    end
-    return text
-end
-
-local function RefreshSuggestionText(prefix)
-    local blocks = {}
-    table.insert(blocks, "Prefix: " .. prefix:upper())
-
-    local suggestionData = GetSuggestions(prefix)
-
-    if suggesterEnabled then
-        if #suggestionData.custom > 0 then
-            table.insert(blocks, BuildSection("Custom Words:", suggestionData.custom, ""))
-        end
-        table.insert(blocks, BuildSection("Suggestions:", suggestionData.normal, "No matches"))
-    end
-
-    if trapModeEnabled then
-        local trapData = FindTraps(prefix)
-
-        if #trapData.custom > 0 then
-            table.insert(blocks, BuildSection("Custom Words:", trapData.custom, ""))
-        end
-        table.insert(blocks, BuildSection("TRAPS:", trapData.normal, "No strong traps found"))
-    end
-
-    return table.concat(blocks, "\n\n")
-end
-
-local lastPrefix = ""
-local lastCheckTime = 0
-
-RunService.Heartbeat:Connect(function()
-    local now = tick()
-    if now - lastCheckTime < 0.08 then
-        return
-    end
-    lastCheckTime = now
-
-    local prefix = GetCurrentPrefix()
-    if prefix == "" or prefix == lastPrefix then
-        return
-    end
-    lastPrefix = prefix
-
-    local text = RefreshSuggestionText(prefix)
-    if suggestionLabel.Text ~= text then
-        suggestionLabel.Text = text
-    end
-end)
-
-print("Last Letter GUI loaded")
