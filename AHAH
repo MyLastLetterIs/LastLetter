@@ -642,7 +642,7 @@ local function FindTraps(prefix)
         return TrapCache[prefix]
     end
 
-    local normal = {}
+local normal = {}
     local custom = {}
     local checkedSuffix = {}
     local candidates = GetCandidates(prefix)
@@ -656,7 +656,7 @@ local function FindTraps(prefix)
                 if #suffix >= 2 and not checkedSuffix[suffix] then
                     checkedSuffix[suffix] = true
 
-local isTrap = false
+                    local isTrap = false
                     if isManual then
                         isTrap = true
                     else
@@ -693,3 +693,14 @@ local isTrap = false
 
     return TrapCache[prefix]
 end
+
+local function BuildSection(title, items, emptyText)
+    local text = title .. "\n"
+    if #items > 0 then
+        text = text .. table.concat(items, "\n")
+    else
+        text = text .. emptyText
+    end
+    return text
+end
+  
