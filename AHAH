@@ -6,6 +6,11 @@ local HttpService = game:GetService("HttpService")
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
+local existingGui = playerGui:FindFirstChild("LastLetterOptimizedFullGUI")
+if existingGui then
+    existingGui:Destroy()
+end
+
 local dictionaries = {
     "https://raw.githubusercontent.com/dwyl/english-words/master/words_alpha.txt",
     "https://raw.githubusercontent.com/dwyl/english-words/master/words.txt",
@@ -101,7 +106,6 @@ local function AddWordToBuckets(word, isCustom)
         if #p3 == 3 then
             AddToBucket(PrefixBuckets3, p3, word)
         end
-
         if #s1 == 1 then
             AddToBucket(SuffixBuckets1, s1, word)
         end
@@ -295,7 +299,7 @@ UserInputService.InputChanged:Connect(function(input)
 end)
 
 local buttonFrame = Instance.new("Frame")
-buttonFrame.Size = UDim2.new(0, 185, 1, -55)
+buttonFrame.Size = UDim2.new(0, 185, 0, 250)
 buttonFrame.Position = UDim2.new(0, 12, 0, 50)
 buttonFrame.BackgroundTransparency = 1
 buttonFrame.Parent = mainFrame
@@ -310,12 +314,12 @@ searchBox.Size = UDim2.new(0, 135, 0, 32)
 searchBox.Position = UDim2.new(0, 205, 0, 50)
 searchBox.PlaceholderText = "Search..."
 searchBox.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
-searchBox.Text = " "
 searchBox.BorderSizePixel = 0
 searchBox.TextColor3 = Color3.new(1, 1, 1)
 searchBox.Font = Enum.Font.Gotham
 searchBox.TextSize = 14
 searchBox.ClearTextOnFocus = false
+searchBox.Text = ""
 searchBox.Parent = mainFrame
 
 local searchBoxCorner = Instance.new("UICorner")
@@ -722,10 +726,6 @@ closeX.MouseButton1Click:Connect(function()
     settingsFrame.Visible = false
 end)
 
-settingsBtn.MouseButton1Click:Connect(function()
-    settingsFrame.Visible = not settingsFrame.Visible
-end)
-
 local settingsContainer = Instance.new("Frame")
 settingsContainer.Size = UDim2.new(1, -20, 1, -50)
 settingsContainer.Position = UDim2.new(0, 10, 0, 45)
@@ -918,12 +918,14 @@ addCustomBtn.MouseButton1Click:Connect(function()
 end)
 
 local function UpdateModeButton()
-    modeBtn.Text = searchMode == "word" and "Word" or searchMode == "suffix" and "Suffix" or "Prefix"
     if searchMode == "word" then
+        modeBtn.Text = "Word"
         modeBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 80)
     elseif searchMode == "suffix" then
+        modeBtn.Text = "Suffix"
         modeBtn.BackgroundColor3 = Color3.fromRGB(220, 140, 0)
     else
+        modeBtn.Text = "Prefix"
         modeBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 220)
     end
 end
