@@ -677,24 +677,6 @@ local function BuildSection(title, items, emptyText)
     return text
 end
 
-local autoTypeBtn = MakeButton("Suggester: OFF")
-autoTypeBtn.MouseButton1Click:Connect(function()
-    suggesterEnabled = not suggesterEnabled
-    autoTypeBtn.Text = "Suggester: " .. (suggesterEnabled and "ON" or "OFF")
-    autoTypeBtn.BackgroundColor3 = suggesterEnabled and Color3.fromRGB(0, 170, 80) or Color3.fromRGB(40, 40, 50)
-    MarkDirty()
-end)
-
-local trapBtn = MakeButton("Trap Mode: OFF")
-trapBtn.MouseButton1Click:Connect(function()
-    trapModeEnabled = not trapModeEnabled
-    trapBtn.Text = "Trap Mode: " .. (trapModeEnabled and "ON" or "OFF")
-    trapBtn.BackgroundColor3 = trapModeEnabled and Color3.fromRGB(220, 60, 60) or Color3.fromRGB(40, 40, 50)
-    MarkDirty()
-end)
-
-local settingsBtn = MakeButton("Settings")
-
 settingsFrame = Instance.new("Frame")
 settingsFrame.Size = UDim2.new(0, 340, 0, 385)
 settingsFrame.Position = UDim2.new(0.5, -170, 0.5, -192)
