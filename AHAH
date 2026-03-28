@@ -31,9 +31,12 @@ local WordSet = {}
 local CustomWordSet = {}
 local PrefixBuckets1 = {}
 local PrefixBuckets2 = {}
+local SuffixBuckets1 = {}
+local SuffixBuckets2 = {}
 local SuggestionCache = {}
 local TrapCache = {}
 local SuffixCountCache = {}
+local SearchCache = {}
 
 local ManualTrap2 = {}
 for _, v in ipairs({
@@ -58,6 +61,7 @@ local function ClearCaches()
     SuggestionCache = {}
     TrapCache = {}
     SuffixCountCache = {}
+    SearchCache = {}
 end
 
 local function CountCustomWords()
@@ -92,6 +96,16 @@ local function AddWordToBuckets(word, isCustom)
         local second = word:sub(1, 2)
         if #second == 2 then
             AddToBucket(PrefixBuckets2, second, word)
+        end
+
+        local last1 = word:sub(-1)
+        if last1 ~= "" then
+            AddToBucket(SuffixBuckets1, last1, word)
+        end
+
+        local last2 = word:sub(-2)
+        if #last2 == 2 then
+            AddToBucket(SuffixBuckets2, last2, word)
         end
     end
 
@@ -220,8 +234,8 @@ screenGui.IgnoreGuiInset = true
 screenGui.Parent = playerGui
 
 local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, 410, 0, 260)
-mainFrame.Position = UDim2.new(1, -430, 0.5, -130)
+mainFrame.Size = UDim2.new(0, 410, 0, 300)
+mainFrame.Position = UDim2.new(1, -430, 0.5, -150)
 mainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
 mainFrame.BackgroundTransparency = 0.05
 mainFrame.BorderSizePixel = 0
@@ -288,8 +302,8 @@ buttonLayout.SortOrder = Enum.SortOrder.LayoutOrder
 buttonLayout.Parent = buttonFrame
 
 local suggestionLabel = Instance.new("TextLabel")
-suggestionLabel.Size = UDim2.new(0, 195, 1, -65)
-suggestionLabel.Position = UDim2.new(0, 205, 0, 52)
+suggestionLabel.Size = UDim2.new(0, 195, 1, -100)
+suggestionLabel.Position = UDim2.new(0, 205, 0, 90)
 suggestionLabel.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
 suggestionLabel.BorderSizePixel = 0
 suggestionLabel.Text = "Turn Suggester or Trap Mode ON"
@@ -305,10 +319,42 @@ local suggestionCorner = Instance.new("UICorner")
 suggestionCorner.CornerRadius = UDim.new(0, 8)
 suggestionCorner.Parent = suggestionLabel
 
+local searchBox = Instance.new("TextBox")
+searchBox.Size = UDim2.new(0, 135, 0, 32)
+searchBox.Position = UDim2.new(0, 205, 0, 50)
+searchBox.PlaceholderText = "Search..."
+searchBox.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+searchBox.BorderSizePixel = 0
+searchBox.TextColor3 = Color3.new(1, 1, 1)
+searchBox.Font = Enum.Font.Gotham
+searchBox.TextSize = 14
+searchBox.ClearTextOnFocus = false
+searchBox.Parent = mainFrame
+
+local searchBoxCorner = Instance.new("UICorner")
+searchBoxCorner.CornerRadius = UDim.new(0, 6)
+searchBoxCorner.Parent = searchBox
+
+local modeBtn = Instance.new("TextButton")
+modeBtn.Size = UDim2.new(0, 55, 0, 32)
+modeBtn.Position = UDim2.new(0, 345, 0, 50)
+modeBtn.Text = "Word"
+modeBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 80)
+modeBtn.BorderSizePixel = 0
+modeBtn.TextColor3 = Color3.new(1, 1, 1)
+modeBtn.Font = Enum.Font.GothamSemibold
+modeBtn.TextSize = 14
+modeBtn.Parent = mainFrame
+
+local modeBtnCorner = Instance.new("UICorner")
+modeBtnCorner.CornerRadius = UDim.new(0, 6)
+modeBtnCorner.Parent = modeBtn
+
 local suggesterEnabled = false
 local trapModeEnabled = false
 local minLength = 3
 local maxLength = 20
+local searchMode = "word"
 
 local settingsFrame
 
@@ -578,6 +624,14 @@ local function GetCandidates(prefix)
     return PrefixBuckets1[prefix:sub(1, 1)] or {}
 end
 
+local function GetSearchCandidatesSuffix(query)
+    if #query >= 2 then
+        return SuffixBuckets2[query:sub(-2)] or {}
+    end
+
+    return SuffixBuckets1[query:sub(-1)] or {}
+end
+
 local function PushLimited(list, value, limit)
     if #list < limit then
         table.insert(list, value)
@@ -642,7 +696,7 @@ local function FindTraps(prefix)
         return TrapCache[prefix]
     end
 
-local normal = {}
+    local normal = {}
     local custom = {}
     local checkedSuffix = {}
     local candidates = GetCandidates(prefix)
@@ -694,6 +748,71 @@ local normal = {}
     return TrapCache[prefix]
 end
 
+local function SearchWords(query, mode)
+    local key = mode .. "|" .. query
+    if SearchCache[key] then
+        return SearchCache[key]
+    end
+
+    local normal = {}
+    local custom = {}
+    local candidates = nil
+
+    if mode == "prefix" then
+        candidates = GetCandidates(query)
+    elseif mode == "suffix" then
+        candidates = GetSearchCandidatesSuffix(query)
+    end
+
+    if mode == "word" then
+        for _, word in ipairs(Words) do
+            if word:find(query, 1, true) then
+                if CustomWordSet[word] then
+                    PushLimited(custom, word, 25)
+                else
+                    PushLimited(normal, word, 25)
+                end
+                if #normal >= 25 and #custom >= 25 then
+                    break
+                end
+            end
+        end
+    elseif mode == "prefix" then
+        for _, word in ipairs(candidates) do
+            if word:sub(1, #query) == query then
+                if CustomWordSet[word] then
+                    PushLimited(custom, word, 25)
+                else
+                    PushLimited(normal, word, 25)
+                end
+                if #normal >= 25 and #custom >= 25 then
+                    break
+                end
+            end
+        end
+    elseif mode == "suffix" then
+        for _, word in ipairs(candidates) do
+            if word:sub(-#query) == query then
+                if CustomWordSet[word] then
+                    PushLimited(custom, word, 25)
+                else
+                    PushLimited(normal, word, 25)
+                end
+                if #normal >= 25 and #custom >= 25 then
+                    break
+                end
+            end
+        end
+    end
+
+    SearchCache[key] = {
+        normal = normal,
+        custom = custom
+    }
+
+    return SearchCache[key]
+end
+
 local function BuildSection(title, items, emptyText)
     local text = title .. "\n"
     if #items > 0 then
@@ -703,17 +822,63 @@ local function BuildSection(title, items, emptyText)
     end
     return text
 end
-  
+
+local function UpdateModeButton()
+    modeBtn.Text = searchMode == "word" and "Word" or searchMode == "suffix" and "Suffix" or "Prefix"
+    if searchMode == "word" then
+        modeBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 80)
+    elseif searchMode == "suffix" then
+        modeBtn.BackgroundColor3 = Color3.fromRGB(220, 140, 0)
+    else
+        modeBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 220)
+    end
+end
+
+modeBtn.MouseButton1Click:Connect(function()
+    if searchMode == "word" then
+        searchMode = "suffix"
+    elseif searchMode == "suffix" then
+        searchMode = "prefix"
+    else
+        searchMode = "word"
+    end
+    UpdateModeButton()
+end)
+
+UpdateModeButton()
+
 local lastPrefix = ""
 local lastUpdate = 0
 
 RunService.Heartbeat:Connect(function()
     local now = tick()
-    if now - lastUpdate < 0.1 then return end
+    if now - lastUpdate < 0.1 then
+        return
+    end
     lastUpdate = now
 
+    local query = searchBox.Text:gsub("^%s+", ""):gsub("%s+$", "")
+
+    if query ~= "" then
+        local data = SearchWords(query:lower(), searchMode)
+        local text = "Search (" .. searchMode:upper() .. "): " .. query .. "\n\n"
+
+        if #data.custom > 0 then
+            text = text .. BuildSection("Custom Words:", data.custom, "") .. "\n\n"
+        end
+
+        text = text .. BuildSection("Results:", data.normal, "No matches")
+
+        if suggestionLabel.Text ~= text then
+            suggestionLabel.Text = text
+        end
+        return
+    end
+
     local prefix = GetCurrentPrefix()
-    if prefix == lastPrefix or prefix == "" then return end
+    if prefix == lastPrefix or prefix == "" then
+        return
+    end
     lastPrefix = prefix
 
     local text = "Prefix: " .. prefix:upper() .. "\n\n"
@@ -732,11 +897,15 @@ RunService.Heartbeat:Connect(function()
         local data = FindTraps(prefix)
 
         if #data.custom > 0 then
-            text = text .. BuildSection("Custom Traps:", data.custom, "") .. "\n\n"
+            text = text .. BuildSection("Custom Words:", data.custom, "") .. "\n\n"
         end
 
         text = text .. BuildSection("Traps:", data.normal, "No traps")
     end
 
-    suggestionLabel.Text = text
+    if suggestionLabel.Text ~= text then
+        suggestionLabel.Text = text
+    end
 end)
+
+print("Last Letter GUI loaded")
