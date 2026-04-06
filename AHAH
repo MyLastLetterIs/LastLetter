@@ -20,16 +20,16 @@ local dictionaries = {
     "https://raw.githubusercontent.com/first20hours/google-10000-english/master/20k.txt",
     "https://raw.githubusercontent.com/first20hours/google-10000-english/master/google-10000-english-no-swears.txt",
     "https://raw.githubusercontent.com/dolph/dictionary/master/enable1.txt",
-    "https://raw.githubusercontent.com/pbevin/lexicon/master/lexicon.txt",
-    "https://raw.githubusercontent.com/dwyl/english-words/refs/heads/master/words.txt"
+    "https://raw.githubusercontent.com/pbevin/lexicon/master/lexicon.txt"
 }
 
-local WORDS_FILE = "lastletter_full_dict_v3.txt"
+local WORDS_FILE = "lastletter_full_dict_v2.txt"
 local CUSTOM_WORDS_FILE = "lastletter_custom_words.txt"
 
 local Words = {}
 local WordSet = {}
 local CustomWordSet = {}
+local CustomWordInfo = {}
 local PrefixBuckets1 = {}
 local PrefixBuckets2 = {}
 local PrefixBuckets3 = {}
@@ -75,7 +75,44 @@ local function CountCustomWords()
     return c
 end
 
-local function AddWordToBuckets(word, isCustom)
+local function NormalizeCustomTag(rawTag)
+    rawTag = tostring(rawTag or "all"):lower()
+    if rawTag == "trap" then
+        return "trap"
+    end
+    if rawTag == "solve" then
+        return "solve"
+    end
+    return "all"
+end
+
+local function ParseCustomEntry(entry)
+    local text = tostring(entry or ""):lower()
+
+    local tag = "all"
+    if text:find("%+trap%+") then
+        tag = "trap"
+    elseif text:find("%+solve%+") then
+        tag = "solve"
+    end
+
+    text = text:gsub("%+trap%+", "")
+    text = text:gsub("%+solve%+", "")
+    text = text:gsub("%s+", "")
+
+    if text == "" then
+        return nil, nil
+    end
+
+    return text, tag
+end
+
+local function CustomWordAllowed(word)
+    local tag = CustomWordInfo[word] or "all"
+    return customWordPriority == "all" or tag == customWordPriority
+end
+
+local function AddWordToBuckets(word, isCustom, customTag)
     word = tostring(word or ""):lower():gsub("%s+", "")
     if not word:match("^[a-z]+$") then
         return false
@@ -120,6 +157,7 @@ local function AddWordToBuckets(word, isCustom)
 
     if isCustom then
         CustomWordSet[word] = true
+        CustomWordInfo[word] = NormalizeCustomTag(customTag)
     end
 
     return inserted
@@ -192,8 +230,17 @@ local function LoadCustomWords()
     end
 
     local content = readfile(CUSTOM_WORDS_FILE)
-    for word in content:gmatch("%S+") do
-        AddWordToBuckets(word, true)
+    for line in content:gmatch("[^\r\n]+") do
+        local word, tag = line:match("^([^|]+)|(.+)$")
+        if not word then
+            word = line
+            tag = "all"
+        end
+        word = tostring(word or ""):lower():gsub("%s+", "")
+        tag = NormalizeCustomTag(tag)
+        if word:match("^[a-z]+$") and #word >= 3 then
+            AddWordToBuckets(word, true, tag)
+        end
     end
 
     ClearCaches()
@@ -203,7 +250,8 @@ end
 local function SaveCustomWords()
     local list = {}
     for word in pairs(CustomWordSet) do
-        table.insert(list, word)
+        local tag = NormalizeCustomTag(CustomWordInfo[word] or "all")
+        table.insert(list, word .. "|" .. tag)
     end
     table.sort(list)
     writefile(CUSTOM_WORDS_FILE, table.concat(list, "\n"))
@@ -366,6 +414,7 @@ local minLength = 3
 local maxLength = 20
 local searchMode = "word"
 local lengthPriority = "normal"
+local customWordPriority = "all"
 local uiDirty = true
 
 local settingsFrame
@@ -498,8 +547,9 @@ local function PushLimited(list, value, limit)
 end
 
 local function GetSuggestions(prefix)
-    if SuggestionCache[prefix] then
-        return SuggestionCache[prefix]
+    local key = prefix .. "|" .. customWordPriority .. "|" .. lengthPriority .. "|" .. tostring(minLength) .. "|" .. tostring(maxLength)
+    if SuggestionCache[key] then
+        return SuggestionCache[key]
     end
 
     local normal = {}
@@ -509,7 +559,9 @@ local function GetSuggestions(prefix)
     for _, word in ipairs(candidates) do
         if word:sub(1, #prefix) == prefix and #word >= minLength and #word <= maxLength then
             if CustomWordSet[word] then
-                PushLimited(custom, word, 10)
+                if CustomWordAllowed(word) then
+                    PushLimited(custom, word, 10)
+                end
             else
                 PushLimited(normal, word, 10)
             end
@@ -523,12 +575,12 @@ local function GetSuggestions(prefix)
     ApplyPriority(normal)
     ApplyPriority(custom)
 
-    SuggestionCache[prefix] = {
+    SuggestionCache[key] = {
         normal = normal,
         custom = custom,
     }
 
-    return SuggestionCache[prefix]
+    return SuggestionCache[key]
 end
 
 local function GetSuffixCount(suffix)
@@ -550,8 +602,9 @@ local function GetSuffixCount(suffix)
 end
 
 local function FindTraps(prefix)
-    if TrapCache[prefix] then
-        return TrapCache[prefix]
+    local key = prefix .. "|" .. customWordPriority .. "|" .. lengthPriority .. "|" .. tostring(minLength) .. "|" .. tostring(maxLength)
+    if TrapCache[key] then
+        return TrapCache[key]
     end
 
     local normal = {}
@@ -581,7 +634,9 @@ local function FindTraps(prefix)
                     if isTrap then
                         local text = word .. " -> trap: " .. suffix:upper()
                         if CustomWordSet[word] then
-                            PushLimited(custom, text, 5)
+                            if CustomWordAllowed(word) then
+                                PushLimited(custom, text, 5)
+                            end
                         else
                             PushLimited(normal, text, 5)
                         end
@@ -601,16 +656,16 @@ local function FindTraps(prefix)
     ApplyPriority(normal)
     ApplyPriority(custom)
 
-    TrapCache[prefix] = {
+    TrapCache[key] = {
         normal = normal,
         custom = custom,
     }
 
-    return TrapCache[prefix]
+    return TrapCache[key]
 end
 
 local function SearchWords(query, mode)
-    local key = mode .. "|" .. query .. "|" .. lengthPriority .. "|" .. tostring(minLength) .. "|" .. tostring(maxLength)
+    local key = mode .. "|" .. query .. "|" .. customWordPriority .. "|" .. lengthPriority .. "|" .. tostring(minLength) .. "|" .. tostring(maxLength)
     if SearchCache[key] then
         return SearchCache[key]
     end
@@ -622,7 +677,9 @@ local function SearchWords(query, mode)
         for _, word in ipairs(Words) do
             if word:find(query, 1, true) then
                 if CustomWordSet[word] then
-                    PushLimited(custom, word, 25)
+                    if CustomWordAllowed(word) then
+                        PushLimited(custom, word, 25)
+                    end
                 else
                     PushLimited(normal, word, 25)
                 end
@@ -636,7 +693,9 @@ local function SearchWords(query, mode)
         for _, word in ipairs(candidates) do
             if word:sub(1, #query) == query then
                 if CustomWordSet[word] then
-                    PushLimited(custom, word, 25)
+                    if CustomWordAllowed(word) then
+                        PushLimited(custom, word, 25)
+                    end
                 else
                     PushLimited(normal, word, 25)
                 end
@@ -650,7 +709,9 @@ local function SearchWords(query, mode)
         for _, word in ipairs(candidates) do
             if word:sub(-#query) == query then
                 if CustomWordSet[word] then
-                    PushLimited(custom, word, 25)
+                    if CustomWordAllowed(word) then
+                        PushLimited(custom, word, 25)
+                    end
                 else
                     PushLimited(normal, word, 25)
                 end
@@ -683,8 +744,8 @@ local function BuildSection(title, items, emptyText)
 end
 
 settingsFrame = Instance.new("Frame")
-settingsFrame.Size = UDim2.new(0, 340, 0, 385)
-settingsFrame.Position = UDim2.new(0.5, -170, 0.5, -192)
+settingsFrame.Size = UDim2.new(0, 340, 0, 420)
+settingsFrame.Position = UDim2.new(0.5, -170, 0.5, -210)
 settingsFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
 settingsFrame.BorderSizePixel = 0
 settingsFrame.Visible = false
@@ -854,6 +915,63 @@ end)
 
 UpdatePriorityButton()
 
+local customPriorityRow = Instance.new("Frame")
+customPriorityRow.Size = UDim2.new(1, 0, 0, 30)
+customPriorityRow.BackgroundTransparency = 1
+customPriorityRow.Parent = settingsContainer
+
+local customPriorityLabel = Instance.new("TextLabel")
+customPriorityLabel.Size = UDim2.new(0.58, 0, 1, 0)
+customPriorityLabel.BackgroundTransparency = 1
+customPriorityLabel.Text = "Custom Word Priority:"
+customPriorityLabel.TextColor3 = Color3.new(1, 1, 1)
+customPriorityLabel.Font = Enum.Font.Gotham
+customPriorityLabel.TextSize = 15
+customPriorityLabel.TextXAlignment = Enum.TextXAlignment.Left
+customPriorityLabel.Parent = customPriorityRow
+
+local customPriorityBtn = Instance.new("TextButton")
+customPriorityBtn.Size = UDim2.new(0.4, 0, 1, 0)
+customPriorityBtn.Position = UDim2.new(0.6, 0, 0, 0)
+customPriorityBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 80)
+customPriorityBtn.BorderSizePixel = 0
+customPriorityBtn.TextColor3 = Color3.new(1, 1, 1)
+customPriorityBtn.Font = Enum.Font.GothamSemibold
+customPriorityBtn.TextSize = 14
+customPriorityBtn.Parent = customPriorityRow
+
+local customPriorityCorner = Instance.new("UICorner")
+customPriorityCorner.CornerRadius = UDim.new(0, 6)
+customPriorityCorner.Parent = customPriorityBtn
+
+local function UpdateCustomPriorityButton()
+    if customWordPriority == "trap" then
+        customPriorityBtn.Text = "Trap"
+        customPriorityBtn.BackgroundColor3 = Color3.fromRGB(220, 60, 60)
+    elseif customWordPriority == "solve" then
+        customPriorityBtn.Text = "Solve"
+        customPriorityBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 220)
+    else
+        customPriorityBtn.Text = "All"
+        customPriorityBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 80)
+    end
+end
+
+customPriorityBtn.MouseButton1Click:Connect(function()
+    if customWordPriority == "trap" then
+        customWordPriority = "solve"
+    elseif customWordPriority == "solve" then
+        customWordPriority = "all"
+    else
+        customWordPriority = "trap"
+    end
+    UpdateCustomPriorityButton()
+    ClearCaches()
+    MarkDirty()
+end)
+
+UpdateCustomPriorityButton()
+
 local customLabel = Instance.new("TextLabel")
 customLabel.Size = UDim2.new(1, 0, 0, 30)
 customLabel.BackgroundTransparency = 1
@@ -867,7 +985,7 @@ customLabel.Parent = settingsContainer
 local customBox = Instance.new("TextBox")
 customBox.Size = UDim2.new(0.7, 0, 0, 30)
 customBox.Position = UDim2.new(0, 0, 0, 35)
-customBox.PlaceholderText = "word1,word2,word3"
+customBox.PlaceholderText = "word1 +solve+, word2 +trap+"
 customBox.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
 customBox.BorderSizePixel = 0
 customBox.TextColor3 = Color3.new(1, 1, 1)
@@ -898,11 +1016,14 @@ addCustomCorner.Parent = addCustomBtn
 addCustomBtn.MouseButton1Click:Connect(function()
     local addedAny = false
 
-    for word in customBox.Text:gmatch("([^,]+)") do
-        word = word:lower():gsub("%s+", "")
-        if #word >= 3 and not CustomWordSet[word] then
+    for entry in customBox.Text:gmatch("([^,]+)") do
+        local word, tag = ParseCustomEntry(entry)
+        if word and #word >= 3 and not CustomWordSet[word] then
+            AddWordToBuckets(word, true, tag or "all")
+            addedAny = true
+        elseif word and #word >= 3 then
             CustomWordSet[word] = true
-            AddWordToBuckets(word, true)
+            CustomWordInfo[word] = NormalizeCustomTag(tag or CustomWordInfo[word] or "all")
             addedAny = true
         end
     end
@@ -1010,6 +1131,7 @@ local lastPrefix = ""
 local lastSearch = ""
 local lastSearchMode = ""
 local lastPriority = ""
+local lastCustomPriority = ""
 local lastSuggesterState = false
 local lastTrapState = false
 local lastRenderedText = ""
@@ -1026,7 +1148,7 @@ RunService.Heartbeat:Connect(function()
     local needsSearch = query ~= ""
 
     if needsSearch then
-        if query == lastSearch and searchMode == lastSearchMode and lengthPriority == lastPriority and not uiDirty then
+        if query == lastSearch and searchMode == lastSearchMode and lengthPriority == lastPriority and customWordPriority == lastCustomPriority and not uiDirty then
             return
         end
 
@@ -1039,6 +1161,7 @@ RunService.Heartbeat:Connect(function()
         lastSearch = query
         lastSearchMode = searchMode
         lastPriority = lengthPriority
+        lastCustomPriority = customWordPriority
         uiDirty = false
         return
     end
@@ -1055,7 +1178,7 @@ RunService.Heartbeat:Connect(function()
         return
     end
 
-    if prefix == lastPrefix and not uiDirty and searchMode == lastSearchMode and lengthPriority == lastPriority and suggesterEnabled == lastSuggesterState and trapModeEnabled == lastTrapState then
+    if prefix == lastPrefix and not uiDirty and searchMode == lastSearchMode and lengthPriority == lastPriority and customWordPriority == lastCustomPriority and suggesterEnabled == lastSuggesterState and trapModeEnabled == lastTrapState then
         return
     end
 
@@ -1069,7 +1192,10 @@ RunService.Heartbeat:Connect(function()
     lastSearch = ""
     lastSearchMode = searchMode
     lastPriority = lengthPriority
+    lastCustomPriority = customWordPriority
     lastSuggesterState = suggesterEnabled
     lastTrapState = trapModeEnabled
     uiDirty = false
 end)
+
+print("Last Letter GUI loaded")
