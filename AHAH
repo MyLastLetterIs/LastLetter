@@ -42,6 +42,22 @@ local TrapCache = {}
 local SearchCache = {}
 local SuffixCountCache = {}
 
+local customWordPriority = "all"
+
+local ManualTrap2 = {}
+for _, v in ipairs({
+    "bs","ez","ff","ft","hm","hs","ht","ie","ii","ks","ld","lm","ls","lt","nd","nn","ns","rf","rl","rm","rp","rs","rt","ue","vy","yl"
+}) do
+    ManualTrap2[v] = true
+end
+
+local ManualTrap3 = {}
+for _, v in ipairs({
+    "amh","anz","iga","keh","kup","rua"
+}) do
+    ManualTrap3[v] = true
+end
+
 local function AddToBucket(bucket, key, word)
     bucket[key] = bucket[key] or {}
     table.insert(bucket[key], word)
@@ -95,13 +111,28 @@ local function ParseCustomEntry(entry)
     local text = tostring(entry or ""):lower()
 
     local tag = "all"
+    local difficulty = tonumber(text:match("(%d+)%s*%*")) or 0
+
+    if text:find("|") then
+        local parts = {}
+        for part in text:gmatch("[^|]+") do
+            table.insert(parts, part)
+        end
+        local word = (parts[1] or ""):gsub("%s+", "")
+        tag = NormalizeCustomTag(parts[2] or "all")
+        difficulty = tonumber(parts[3]) or difficulty
+        tag, difficulty = NormalizeCustomInfo(tag, difficulty)
+        if word == "" then
+            return nil, nil, 0
+        end
+        return word, tag, difficulty
+    end
+
     if text:find("%+solve%+") then
         tag = "solve"
     elseif text:find("%+trap%+") then
         tag = "trap"
     end
-
-    local difficulty = tonumber(text:match("(%d+)%s*%*")) or 0
 
     text = text:gsub("%+solve%+", "")
     text = text:gsub("%+trap%+", "")
@@ -238,9 +269,11 @@ local function LoadCustomWords()
     local content = readfile(CUSTOM_WORDS_FILE)
     for line in content:gmatch("[^\r\n]+") do
         local word, tag, diff = line:match("^([^|]+)|([^|]+)|([^|]+)$")
-        if word then
-            diff = tonumber(diff) or 0
-        else
+        if not word then
+            word, tag = line:match("^([^|]+)|([^|]+)$")
+            diff = 0
+        end
+        if not word then
             word, tag, diff = ParseCustomEntry(line)
         end
 
@@ -836,6 +869,19 @@ local function GetCurrentPrefix()
     return prefix:lower()
 end
 
+local function GetLivePrefix()
+    local focused = UserInputService:GetFocusedTextBox()
+    if focused and focused ~= searchBox then
+        local raw = tostring(focused.Text or "")
+        local clean = raw:lower():gsub("%s+", "")
+        clean = clean:gsub("[^a-z]", "")
+        if #clean > 0 then
+            return clean
+        end
+    end
+    return GetCurrentPrefix()
+end
+
 local function PushLimited(list, value, limit)
     if #list < limit then
         table.insert(list, value)
@@ -867,49 +913,54 @@ local function SortWordList(list)
     table.sort(list, CompareWords)
 end
 
+local function CustomRank(word, context)
+    local tag = CustomWordTags[word] or "all"
+
+    if customWordPriority == "trap" then
+        if tag ~= "trap" then
+            return 99
+        end
+        return 1
+    elseif customWordPriority == "solve" then
+        if tag ~= "solve" then
+            return 99
+        end
+        return 1
+    end
+
+    if context == "trap" then
+        if tag == "trap" then
+            return 1
+        elseif tag == "all" then
+            return 2
+        else
+            return 3
+        end
+    else
+        if tag == "solve" then
+            return 1
+        elseif tag == "all" then
+            return 2
+        else
+            return 3
+        end
+    end
+end
+
 local function SortCustomWordList(list, context)
     table.sort(list, function(a, b)
-        local ta = CustomWordTags[a] or "all"
-        local tb = CustomWordTags[b] or "all"
-        local da = CustomWordDiffs[a] or 0
-        local db = CustomWordDiffs[b] or 0
+        local ra = CustomRank(a, context)
+        local rb = CustomRank(b, context)
 
-        local ra
-        local rb
+        if ra ~= rb then
+            return ra < rb
+        end
 
         if context == "trap" then
-            if customWordPriority == "trap" then
-                ra = ta == "trap" and 1 or 2
-                rb = tb == "trap" and 1 or 2
-            elseif customWordPriority == "solve" then
-                ra = 2
-                rb = 2
-            else
-                ra = ta == "trap" and 1 or 2
-                rb = tb == "trap" and 1 or 2
-            end
-
-            if ra ~= rb then
-                return ra < rb
-            end
-
+            local da = tonumber(CustomWordDiffs[a] or 0) or 0
+            local db = tonumber(CustomWordDiffs[b] or 0) or 0
             if da ~= db then
                 return da > db
-            end
-        else
-            if customWordPriority == "solve" then
-                ra = ta == "solve" and 1 or 2
-                rb = tb == "solve" and 1 or 2
-            elseif customWordPriority == "trap" then
-                ra = 2
-                rb = 2
-            else
-                ra = ta == "solve" and 1 or ta == "all" and 2 or 3
-                rb = tb == "solve" and 1 or tb == "all" and 2 or 3
-            end
-
-            if ra ~= rb then
-                return ra < rb
             end
         end
 
@@ -946,22 +997,18 @@ end
 local function ShouldShowCustomWord(word, context)
     local tag = CustomWordTags[word] or "all"
 
-    if context == "trap" then
-        if customWordPriority == "solve" then
-            return false
-        end
-        if customWordPriority == "trap" then
-            return tag == "trap"
-        end
-        return tag == "trap" or tag == "all"
+    if customWordPriority == "trap" then
+        return tag == "trap"
     end
 
-    if customWordPriority == "trap" then
-        return false
-    end
     if customWordPriority == "solve" then
         return tag == "solve"
     end
+
+    if context == "trap" then
+        return tag == "trap" or tag == "all"
+    end
+
     return tag == "solve" or tag == "all"
 end
 
@@ -1086,8 +1133,8 @@ local function FindTraps(prefix)
     end)
 
     table.sort(customDirectWords, function(a, b)
-        local da = CustomWordDiffs[a] or 0
-        local db = CustomWordDiffs[b] or 0
+        local da = tonumber(CustomWordDiffs[a] or 0) or 0
+        local db = tonumber(CustomWordDiffs[b] or 0) or 0
         if da ~= db then
             return da > db
         end
@@ -1095,6 +1142,11 @@ local function FindTraps(prefix)
     end)
 
     table.sort(customDynamicEntries, function(a, b)
+        local da = tonumber(CustomWordDiffs[a.word] or 0) or 0
+        local db = tonumber(CustomWordDiffs[b.word] or 0) or 0
+        if da ~= db then
+            return da > db
+        end
         return CompareWords(a.word, b.word)
     end)
 
@@ -1313,7 +1365,7 @@ RunService.Heartbeat:Connect(function()
         return
     end
 
-    local prefix = GetCurrentPrefix()
+    local prefix = GetLivePrefix()
     if prefix == "" then
         local text = "Turn Suggester or Trap Mode ON"
         if suggestionLabel.Text ~= text then
