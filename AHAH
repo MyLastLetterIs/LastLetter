@@ -30,6 +30,7 @@ local Words = {}
 local WordSet = {}
 local CustomWordSet = {}
 local CustomWordTags = {}
+local CustomWordDiffs = {}
 local PrefixBuckets1 = {}
 local PrefixBuckets2 = {}
 local PrefixBuckets3 = {}
@@ -40,22 +41,6 @@ local SuggestionCache = {}
 local TrapCache = {}
 local SearchCache = {}
 local SuffixCountCache = {}
-
-local customWordPriority = "all"
-
-local ManualTrap2 = {}
-for _, v in ipairs({
-    "bs","ez","ff","ft","hm","hs","ht","ie","ii","ks","ld","lm","ls","lt","nd","nn","ns","rf","rl","rm","rp","rs","rt","ue","vy","yl"
-}) do
-    ManualTrap2[v] = true
-end
-
-local ManualTrap3 = {}
-for _, v in ipairs({
-    "amh","anz","iga","keh","kup","rua"
-}) do
-    ManualTrap3[v] = true
-end
 
 local function AddToBucket(bucket, key, word)
     bucket[key] = bucket[key] or {}
@@ -88,6 +73,24 @@ local function NormalizeCustomTag(rawTag)
     return "all"
 end
 
+local function NormalizeCustomInfo(tag, difficulty)
+    tag = NormalizeCustomTag(tag)
+    difficulty = tonumber(difficulty) or 0
+
+    if tag == "trap" then
+        if difficulty < 1 then
+            difficulty = 1
+        end
+        if difficulty > 9 then
+            difficulty = 9
+        end
+    else
+        difficulty = 0
+    end
+
+    return tag, difficulty
+end
+
 local function ParseCustomEntry(entry)
     local text = tostring(entry or ""):lower()
 
@@ -98,23 +101,22 @@ local function ParseCustomEntry(entry)
         tag = "trap"
     end
 
+    local difficulty = tonumber(text:match("(%d+)%s*%*")) or 0
+
     text = text:gsub("%+solve%+", "")
     text = text:gsub("%+trap%+", "")
+    text = text:gsub("%d+%s*%*", "")
     text = text:gsub("%s+", "")
 
     if text == "" then
-        return nil, nil
+        return nil, nil, 0
     end
 
-    return text, tag
+    tag, difficulty = NormalizeCustomInfo(tag, difficulty)
+    return text, tag, difficulty
 end
 
-local function CustomWordAllowed(word)
-    local tag = CustomWordTags[word] or "all"
-    return customWordPriority == "all" or tag == customWordPriority
-end
-
-local function AddWordToBuckets(word, isCustom, customTag)
+local function AddWordToBuckets(word, isCustom, customTag, customDifficulty)
     word = tostring(word or ""):lower():gsub("%s+", "")
     if not word:match("^[a-z]+$") then
         return false
@@ -158,8 +160,10 @@ local function AddWordToBuckets(word, isCustom, customTag)
     end
 
     if isCustom then
+        local tag, diff = NormalizeCustomInfo(customTag, customDifficulty)
         CustomWordSet[word] = true
-        CustomWordTags[word] = NormalizeCustomTag(customTag)
+        CustomWordTags[word] = tag
+        CustomWordDiffs[word] = diff
     end
 
     return inserted
@@ -233,12 +237,15 @@ local function LoadCustomWords()
 
     local content = readfile(CUSTOM_WORDS_FILE)
     for line in content:gmatch("[^\r\n]+") do
-        local word, tag = line:match("^([^|]+)|(.+)$")
-        if not word then
-            word, tag = ParseCustomEntry(line)
+        local word, tag, diff = line:match("^([^|]+)|([^|]+)|([^|]+)$")
+        if word then
+            diff = tonumber(diff) or 0
+        else
+            word, tag, diff = ParseCustomEntry(line)
         end
+
         if word and word:match("^[a-z]+$") and #word >= 3 then
-            AddWordToBuckets(word, true, tag or "all")
+            AddWordToBuckets(word, true, tag or "all", diff or 0)
         end
     end
 
@@ -250,7 +257,8 @@ local function SaveCustomWords()
     local list = {}
     for word in pairs(CustomWordSet) do
         local tag = NormalizeCustomTag(CustomWordTags[word] or "all")
-        table.insert(list, word .. "|" .. tag)
+        local diff = tonumber(CustomWordDiffs[word] or 0) or 0
+        table.insert(list, word .. "|" .. tag .. "|" .. tostring(diff))
     end
     table.sort(list)
     writefile(CUSTOM_WORDS_FILE, table.concat(list, "\n"))
@@ -655,12 +663,12 @@ local function UpdateCustomPriorityButton()
 end
 
 customPriorityBtn.MouseButton1Click:Connect(function()
-    if customWordPriority == "trap" then
-        customWordPriority = "solve"
-    elseif customWordPriority == "solve" then
-        customWordPriority = "all"
-    else
+    if customWordPriority == "all" then
         customWordPriority = "trap"
+    elseif customWordPriority == "trap" then
+        customWordPriority = "solve"
+    else
+        customWordPriority = "all"
     end
     UpdateCustomPriorityButton()
     ClearCaches()
@@ -682,7 +690,7 @@ customLabel.Parent = settingsContainer
 local customBox = Instance.new("TextBox")
 customBox.Size = UDim2.new(0.7, 0, 0, 30)
 customBox.Position = UDim2.new(0, 0, 0, 35)
-customBox.PlaceholderText = "word1 +solve+, word2 +trap+"
+customBox.PlaceholderText = "word1 +solve+, word2 +trap+ 3*"
 customBox.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
 customBox.BorderSizePixel = 0
 customBox.TextColor3 = Color3.new(1, 1, 1)
@@ -714,13 +722,17 @@ addCustomBtn.MouseButton1Click:Connect(function()
     local addedAny = false
 
     for entry in customBox.Text:gmatch("([^,]+)") do
-        local word, tag = ParseCustomEntry(entry)
+        local word, tag, diff = ParseCustomEntry(entry)
         if word and #word >= 3 and not CustomWordSet[word] then
-            AddWordToBuckets(word, true, tag or "all")
+            AddWordToBuckets(word, true, tag or "all", diff or 0)
             addedAny = true
         elseif word and #word >= 3 then
+            local fixedTag = NormalizeCustomTag(tag or CustomWordTags[word] or "all")
+            local fixedDiff = diff or (CustomWordDiffs[word] or 0)
+            fixedTag, fixedDiff = NormalizeCustomInfo(fixedTag, fixedDiff)
             CustomWordSet[word] = true
-            CustomWordTags[word] = NormalizeCustomTag(tag or CustomWordTags[word] or "all")
+            CustomWordTags[word] = fixedTag
+            CustomWordDiffs[word] = fixedDiff
             addedAny = true
         end
     end
@@ -830,39 +842,79 @@ local function PushLimited(list, value, limit)
     end
 end
 
-local function ApplyPriority(list)
-    if #list <= 1 then
-        return
-    end
-
+local function CompareWords(a, b)
     if lengthPriority == "longest" then
-        table.sort(list, function(a, b)
-            if #a ~= #b then
-                return #a > #b
-            end
-            return a < b
-        end)
+        if #a ~= #b then
+            return #a > #b
+        end
     elseif lengthPriority == "shortest" then
-        table.sort(list, function(a, b)
-            if #a ~= #b then
-                return #a < #b
-            end
-            return a < b
-        end)
+        if #a ~= #b then
+            return #a < #b
+        end
     else
         local target = math.floor((minLength + maxLength) / 2)
-        table.sort(list, function(a, b)
-            local da = math.abs(#a - target)
-            local db = math.abs(#b - target)
-            if da ~= db then
-                return da < db
-            end
-            if #a ~= #b then
-                return #a < #b
-            end
-            return a < b
-        end)
+        local da = math.abs(#a - target)
+        local db = math.abs(#b - target)
+        if da ~= db then
+            return da < db
+        end
     end
+
+    return a < b
+end
+
+local function SortWordList(list)
+    table.sort(list, CompareWords)
+end
+
+local function SortCustomWordList(list, context)
+    table.sort(list, function(a, b)
+        local ta = CustomWordTags[a] or "all"
+        local tb = CustomWordTags[b] or "all"
+        local da = CustomWordDiffs[a] or 0
+        local db = CustomWordDiffs[b] or 0
+
+        local ra
+        local rb
+
+        if context == "trap" then
+            if customWordPriority == "trap" then
+                ra = ta == "trap" and 1 or 2
+                rb = tb == "trap" and 1 or 2
+            elseif customWordPriority == "solve" then
+                ra = 2
+                rb = 2
+            else
+                ra = ta == "trap" and 1 or 2
+                rb = tb == "trap" and 1 or 2
+            end
+
+            if ra ~= rb then
+                return ra < rb
+            end
+
+            if da ~= db then
+                return da > db
+            end
+        else
+            if customWordPriority == "solve" then
+                ra = ta == "solve" and 1 or 2
+                rb = tb == "solve" and 1 or 2
+            elseif customWordPriority == "trap" then
+                ra = 2
+                rb = 2
+            else
+                ra = ta == "solve" and 1 or ta == "all" and 2 or 3
+                rb = tb == "solve" and 1 or tb == "all" and 2 or 3
+            end
+
+            if ra ~= rb then
+                return ra < rb
+            end
+        end
+
+        return CompareWords(a, b)
+    end)
 end
 
 local function GetPrefixCandidates(prefix)
@@ -891,6 +943,28 @@ local function GetSuffixCandidates(query)
     return Words
 end
 
+local function ShouldShowCustomWord(word, context)
+    local tag = CustomWordTags[word] or "all"
+
+    if context == "trap" then
+        if customWordPriority == "solve" then
+            return false
+        end
+        if customWordPriority == "trap" then
+            return tag == "trap"
+        end
+        return tag == "trap" or tag == "all"
+    end
+
+    if customWordPriority == "trap" then
+        return false
+    end
+    if customWordPriority == "solve" then
+        return tag == "solve"
+    end
+    return tag == "solve" or tag == "all"
+end
+
 local function GetSuggestions(prefix)
     local key = prefix .. "|" .. customWordPriority .. "|" .. lengthPriority .. "|" .. tostring(minLength) .. "|" .. tostring(maxLength)
     if SuggestionCache[key] then
@@ -904,11 +978,11 @@ local function GetSuggestions(prefix)
     for _, word in ipairs(candidates) do
         if word:sub(1, #prefix) == prefix and #word >= minLength and #word <= maxLength then
             if CustomWordSet[word] then
-                if CustomWordAllowed(word) then
-                    PushLimited(custom, word, 10)
+                if ShouldShowCustomWord(word, "suggestion") then
+                    table.insert(custom, word)
                 end
             else
-                PushLimited(normal, word, 10)
+                table.insert(normal, word)
             end
 
             if #normal >= 10 and #custom >= 10 then
@@ -917,8 +991,8 @@ local function GetSuggestions(prefix)
         end
     end
 
-    ApplyPriority(normal)
-    ApplyPriority(custom)
+    SortWordList(normal)
+    SortCustomWordList(custom, "suggestion")
 
     SuggestionCache[key] = {
         normal = normal,
@@ -952,54 +1026,101 @@ local function FindTraps(prefix)
         return TrapCache[key]
     end
 
-    local normal = {}
-    local custom = {}
-    local checkedSuffix = {}
+    local normalEntries = {}
+    local customDirectWords = {}
+    local customDynamicEntries = {}
+    local seenNormal = {}
+    local seenCustomDirect = {}
+    local seenCustomDynamic = {}
     local candidates = GetPrefixCandidates(prefix)
+
+    local function suffixQualifies(suffix)
+        local count = GetSuffixCount(suffix)
+        return count > 0 and count <= 6
+    end
 
     for _, word in ipairs(candidates) do
         if word:sub(1, #prefix) == prefix then
-            local suffix2 = word:sub(-2)
-            local suffix3 = word:sub(-3)
+            local tag = CustomWordTags[word] or "all"
+            local isCustom = CustomWordSet[word] == true
 
-            local function handleSuffix(suffix, isManual)
-                if #suffix >= 2 and not checkedSuffix[suffix] then
-                    checkedSuffix[suffix] = true
+            if isCustom and tag == "trap" and ShouldShowCustomWord(word, "trap") then
+                if not seenCustomDirect[word] then
+                    table.insert(customDirectWords, word)
+                    seenCustomDirect[word] = true
+                end
+            else
+                local suffix3 = word:sub(-3)
+                local suffix2 = word:sub(-2)
 
-                    local isTrap = false
-                    if isManual then
-                        isTrap = true
-                    else
-                        local count = GetSuffixCount(suffix)
-                        if count > 0 and count <= 6 then
-                            isTrap = true
+                local selectedSuffix = nil
+                if #suffix3 >= 2 and (ManualTrap3[suffix3] or suffixQualifies(suffix3)) then
+                    selectedSuffix = suffix3
+                elseif #suffix2 >= 2 and (ManualTrap2[suffix2] or suffixQualifies(suffix2)) then
+                    selectedSuffix = suffix2
+                end
+
+                if selectedSuffix then
+                    if isCustom then
+                        if tag == "all" and ShouldShowCustomWord(word, "trap") and not seenCustomDynamic[word] then
+                            table.insert(customDynamicEntries, { word = word, suffix = selectedSuffix })
+                            seenCustomDynamic[word] = true
                         end
-                    end
-
-                    if isTrap then
-                        local text = word .. " -> trap: " .. suffix:upper()
-                        if CustomWordSet[word] then
-                            if CustomWordAllowed(word) then
-                                PushLimited(custom, text, 5)
-                            end
-                        else
-                            PushLimited(normal, text, 5)
+                    else
+                        if not seenNormal[word] then
+                            table.insert(normalEntries, { word = word, suffix = selectedSuffix })
+                            seenNormal[word] = true
                         end
                     end
                 end
             end
 
-            handleSuffix(suffix3, ManualTrap3[suffix3] == true)
-            handleSuffix(suffix2, ManualTrap2[suffix2] == true)
-
-            if #normal >= 5 and #custom >= 5 then
+            if #normalEntries >= 5 and #customDirectWords >= 5 and #customDynamicEntries >= 5 then
                 break
             end
         end
     end
 
-    ApplyPriority(normal)
-    ApplyPriority(custom)
+    table.sort(normalEntries, function(a, b)
+        return CompareWords(a.word, b.word)
+    end)
+
+    table.sort(customDirectWords, function(a, b)
+        local da = CustomWordDiffs[a] or 0
+        local db = CustomWordDiffs[b] or 0
+        if da ~= db then
+            return da > db
+        end
+        return CompareWords(a, b)
+    end)
+
+    table.sort(customDynamicEntries, function(a, b)
+        return CompareWords(a.word, b.word)
+    end)
+
+    local normal = {}
+    for _, entry in ipairs(normalEntries) do
+        table.insert(normal, entry.word .. " -> trap: " .. entry.suffix:upper())
+    end
+
+    local custom = {}
+    for _, word in ipairs(customDirectWords) do
+        local diff = tonumber(CustomWordDiffs[word] or 0) or 0
+        local label = word
+        if diff > 0 then
+            label = label .. " " .. tostring(diff) .. "*"
+        end
+        table.insert(custom, label)
+    end
+
+    for _, entry in ipairs(customDynamicEntries) do
+        local diff = tonumber(CustomWordDiffs[entry.word] or 0) or 0
+        local label = entry.word
+        if diff > 0 then
+            label = label .. " " .. tostring(diff) .. "*"
+        end
+        table.insert(custom, label .. " -> trap: " .. entry.suffix:upper())
+    end
 
     TrapCache[key] = {
         normal = normal,
@@ -1022,11 +1143,11 @@ local function SearchWords(query, mode)
         for _, word in ipairs(Words) do
             if word:find(query, 1, true) then
                 if CustomWordSet[word] then
-                    if CustomWordAllowed(word) then
-                        PushLimited(custom, word, 25)
+                    if ShouldShowCustomWord(word, "suggestion") then
+                        table.insert(custom, word)
                     end
                 else
-                    PushLimited(normal, word, 25)
+                    table.insert(normal, word)
                 end
                 if #normal >= 25 and #custom >= 25 then
                     break
@@ -1038,11 +1159,11 @@ local function SearchWords(query, mode)
         for _, word in ipairs(candidates) do
             if word:sub(1, #query) == query then
                 if CustomWordSet[word] then
-                    if CustomWordAllowed(word) then
-                        PushLimited(custom, word, 25)
+                    if ShouldShowCustomWord(word, "suggestion") then
+                        table.insert(custom, word)
                     end
                 else
-                    PushLimited(normal, word, 25)
+                    table.insert(normal, word)
                 end
                 if #normal >= 25 and #custom >= 25 then
                     break
@@ -1054,11 +1175,11 @@ local function SearchWords(query, mode)
         for _, word in ipairs(candidates) do
             if word:sub(-#query) == query then
                 if CustomWordSet[word] then
-                    if CustomWordAllowed(word) then
-                        PushLimited(custom, word, 25)
+                    if ShouldShowCustomWord(word, "suggestion") then
+                        table.insert(custom, word)
                     end
                 else
-                    PushLimited(normal, word, 25)
+                    table.insert(normal, word)
                 end
                 if #normal >= 25 and #custom >= 25 then
                     break
@@ -1067,8 +1188,8 @@ local function SearchWords(query, mode)
         end
     end
 
-    ApplyPriority(normal)
-    ApplyPriority(custom)
+    SortWordList(normal)
+    SortCustomWordList(custom, "suggestion")
 
     SearchCache[key] = {
         normal = normal,
@@ -1086,6 +1207,19 @@ local function BuildSection(title, items, emptyText)
         text = text .. emptyText
     end
     return text
+end
+
+local function UpdateModeButton()
+    if searchMode == "word" then
+        modeBtn.Text = "Word"
+        modeBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 80)
+    elseif searchMode == "suffix" then
+        modeBtn.Text = "Suffix"
+        modeBtn.BackgroundColor3 = Color3.fromRGB(220, 140, 0)
+    else
+        modeBtn.Text = "Prefix"
+        modeBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 220)
+    end
 end
 
 local function RenderSearch(query)
@@ -1125,6 +1259,20 @@ local function RenderPrefix(prefix)
 
     return text
 end
+
+modeBtn.MouseButton1Click:Connect(function()
+    if searchMode == "word" then
+        searchMode = "suffix"
+    elseif searchMode == "suffix" then
+        searchMode = "prefix"
+    else
+        searchMode = "word"
+    end
+    UpdateModeButton()
+    MarkDirty()
+end)
+
+UpdateModeButton()
 
 local lastPrefix = ""
 local lastSearch = ""
