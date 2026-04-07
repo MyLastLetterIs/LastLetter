@@ -366,11 +366,18 @@ local maxLength = 20
 local searchMode = "word"
 local lengthPriority = "normal"
 local uiDirty = true
+local currentPage = 1
+local pageSize = 9
+local lastSearchActive = false
 
 local settingsFrame
 
 local function MarkDirty()
     uiDirty = true
+end
+
+local function ResetPagination()
+    currentPage = 1
 end
 
 local function MakeButton(text)
@@ -496,6 +503,28 @@ local function PushLimited(list, value, limit)
     end
 end
 
+local function GetPageCount(normalList, customList, size)
+    local normalPages = math.max(1, math.ceil(#normalList / size))
+    local customPages = math.max(1, math.ceil(#customList / size))
+    return math.max(normalPages, customPages)
+end
+
+local function SlicePage(items, page, size)
+    local startIndex = ((page - 1) * size) + 1
+    local endIndex = math.min(#items, startIndex + size - 1)
+    local result = {}
+
+    if startIndex > #items then
+        return result
+    end
+
+    for i = startIndex, endIndex do
+        table.insert(result, items[i])
+    end
+
+    return result
+end
+
 local function GetSuggestions(prefix)
     if SuggestionCache[prefix] then
         return SuggestionCache[prefix]
@@ -508,13 +537,9 @@ local function GetSuggestions(prefix)
     for _, word in ipairs(candidates) do
         if word:sub(1, #prefix) == prefix and #word >= minLength and #word <= maxLength then
             if CustomWordSet[word] then
-                PushLimited(custom, word, 10)
+                table.insert(custom, word)
             else
-                PushLimited(normal, word, 10)
-            end
-
-            if #normal >= 10 and #custom >= 10 then
-                break
+                table.insert(normal, word)
             end
         end
     end
@@ -580,9 +605,9 @@ local function FindTraps(prefix)
                     if isTrap then
                         local text = word .. " -> trap: " .. suffix:upper()
                         if CustomWordSet[word] then
-                            PushLimited(custom, text, 5)
+                            table.insert(custom, text)
                         else
-                            PushLimited(normal, text, 5)
+                            table.insert(normal, text)
                         end
                     end
                 end
@@ -590,10 +615,6 @@ local function FindTraps(prefix)
 
             handleSuffix(suffix3, ManualTrap3[suffix3] == true)
             handleSuffix(suffix2, ManualTrap2[suffix2] == true)
-
-            if #normal >= 5 and #custom >= 5 then
-                break
-            end
         end
     end
 
@@ -621,12 +642,9 @@ local function SearchWords(query, mode)
         for _, word in ipairs(Words) do
             if word:find(query, 1, true) then
                 if CustomWordSet[word] then
-                    PushLimited(custom, word, 25)
+                    table.insert(custom, word)
                 else
-                    PushLimited(normal, word, 25)
-                end
-                if #normal >= 25 and #custom >= 25 then
-                    break
+                    table.insert(normal, word)
                 end
             end
         end
@@ -635,12 +653,9 @@ local function SearchWords(query, mode)
         for _, word in ipairs(candidates) do
             if word:sub(1, #query) == query then
                 if CustomWordSet[word] then
-                    PushLimited(custom, word, 25)
+                    table.insert(custom, word)
                 else
-                    PushLimited(normal, word, 25)
-                end
-                if #normal >= 25 and #custom >= 25 then
-                    break
+                    table.insert(normal, word)
                 end
             end
         end
@@ -649,12 +664,9 @@ local function SearchWords(query, mode)
         for _, word in ipairs(candidates) do
             if word:sub(-#query) == query then
                 if CustomWordSet[word] then
-                    PushLimited(custom, word, 25)
+                    table.insert(custom, word)
                 else
-                    PushLimited(normal, word, 25)
-                end
-                if #normal >= 25 and #custom >= 25 then
-                    break
+                    table.insert(normal, word)
                 end
             end
         end
@@ -671,14 +683,58 @@ local function SearchWords(query, mode)
     return SearchCache[key]
 end
 
+local function FormatThreePerLine(items)
+    local lines = {}
+    for i = 1, #items, 3 do
+        local line = {}
+        table.insert(line, items[i])
+        if items[i + 1] then
+            table.insert(line, items[i + 1])
+        end
+        if items[i + 2] then
+            table.insert(line, items[i + 2])
+        end
+        table.insert(lines, table.concat(line, ", "))
+    end
+    return lines
+end
+
 local function BuildSection(title, items, emptyText)
     local text = title .. "\n"
     if #items > 0 then
-        text = text .. table.concat(items, "\n")
+        text = text .. table.concat(FormatThreePerLine(items), "\n")
     else
         text = text .. emptyText
     end
     return text
+end
+
+local function GetActivePageCount()
+    local query = searchBox.Text:gsub("^%s+", ""):gsub("%s+$", ""):lower()
+
+    if query ~= "" then
+        local data = SearchWords(query, searchMode)
+        return GetPageCount(data.normal, data.custom, pageSize)
+    end
+
+    local prefix = GetCurrentPrefix()
+    if prefix == "" then
+        return 1
+    end
+
+    local totalPages = 1
+
+    if suggesterEnabled then
+        local data = GetSuggestions(prefix)
+        totalPages = math.max(totalPages, GetPageCount(data.normal, data.custom, pageSize))
+    end
+
+    if trapModeEnabled then
+        local data = FindTraps(prefix)
+        totalPages = math.max(totalPages, GetPageCount(data.normal, data.custom, pageSize))
+    end
+
+    return totalPages
 end
 
 settingsFrame = Instance.new("Frame")
@@ -778,6 +834,7 @@ minBox.FocusLost:Connect(function()
     if n and n >= 1 then
         minLength = n
         ClearCaches()
+        ResetPagination()
         MarkDirty()
     else
         minBox.Text = tostring(minLength)
@@ -790,6 +847,7 @@ maxBox.FocusLost:Connect(function()
     if n and n >= minLength then
         maxLength = n
         ClearCaches()
+        ResetPagination()
         MarkDirty()
     else
         maxBox.Text = tostring(maxLength)
@@ -848,6 +906,7 @@ priorityBtn.MouseButton1Click:Connect(function()
     end
     UpdatePriorityButton()
     ClearCaches()
+    ResetPagination()
     MarkDirty()
 end)
 
@@ -908,6 +967,7 @@ addCustomBtn.MouseButton1Click:Connect(function()
 
     customBox.Text = ""
     ClearCaches()
+    ResetPagination()
 
     if addedAny then
         pcall(SaveCustomWords)
@@ -939,10 +999,29 @@ modeBtn.MouseButton1Click:Connect(function()
         searchMode = "word"
     end
     UpdateModeButton()
+    ResetPagination()
     MarkDirty()
 end)
 
 UpdateModeButton()
+
+local function StepPage(delta)
+    local totalPages = GetActivePageCount()
+    if totalPages <= 1 then
+        currentPage = 1
+        MarkDirty()
+        return
+    end
+
+    currentPage = currentPage + delta
+    if currentPage < 1 then
+        currentPage = totalPages
+    elseif currentPage > totalPages then
+        currentPage = 1
+    end
+
+    MarkDirty()
+end
 
 local suggesterBtn = MakeButton("Suggester: OFF")
 suggesterBtn.MouseButton1Click:Connect(function()
@@ -950,6 +1029,7 @@ suggesterBtn.MouseButton1Click:Connect(function()
     suggesterBtn.Text = "Suggester: " .. (suggesterEnabled and "ON" or "OFF")
     suggesterBtn.BackgroundColor3 = suggesterEnabled and Color3.fromRGB(0, 170, 80) or Color3.fromRGB(40, 40, 50)
     ClearCaches()
+    ResetPagination()
     MarkDirty()
 end)
 
@@ -959,7 +1039,51 @@ trapModeBtn.MouseButton1Click:Connect(function()
     trapModeBtn.Text = "Trap Mode: " .. (trapModeEnabled and "ON" or "OFF")
     trapModeBtn.BackgroundColor3 = trapModeEnabled and Color3.fromRGB(220, 60, 60) or Color3.fromRGB(40, 40, 50)
     ClearCaches()
+    ResetPagination()
     MarkDirty()
+end)
+
+local pageNavFrame = Instance.new("Frame")
+pageNavFrame.Size = UDim2.new(1, 0, 0, 28)
+pageNavFrame.BackgroundTransparency = 1
+pageNavFrame.Parent = buttonFrame
+
+local prevPageBtn = Instance.new("TextButton")
+prevPageBtn.Size = UDim2.new(0.47, 0, 1, 0)
+prevPageBtn.Position = UDim2.new(0, 0, 0, 0)
+prevPageBtn.Text = "Prev"
+prevPageBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+prevPageBtn.BorderSizePixel = 0
+prevPageBtn.TextColor3 = Color3.new(1, 1, 1)
+prevPageBtn.Font = Enum.Font.GothamSemibold
+prevPageBtn.TextSize = 12
+prevPageBtn.Parent = pageNavFrame
+
+local prevCorner = Instance.new("UICorner")
+prevCorner.CornerRadius = UDim.new(0, 6)
+prevCorner.Parent = prevPageBtn
+
+local nextPageBtn = Instance.new("TextButton")
+nextPageBtn.Size = UDim2.new(0.47, 0, 1, 0)
+nextPageBtn.Position = UDim2.new(0.53, 0, 0, 0)
+nextPageBtn.Text = "Next"
+nextPageBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+nextPageBtn.BorderSizePixel = 0
+nextPageBtn.TextColor3 = Color3.new(1, 1, 1)
+nextPageBtn.Font = Enum.Font.GothamSemibold
+nextPageBtn.TextSize = 12
+nextPageBtn.Parent = pageNavFrame
+
+local nextCorner = Instance.new("UICorner")
+nextCorner.CornerRadius = UDim.new(0, 6)
+nextCorner.Parent = nextPageBtn
+
+prevPageBtn.MouseButton1Click:Connect(function()
+    StepPage(-1)
+end)
+
+nextPageBtn.MouseButton1Click:Connect(function()
+    StepPage(1)
 end)
 
 local settingsToggleBtn = MakeButton("Settings")
@@ -969,33 +1093,68 @@ end)
 
 local function RenderSearch(query)
     local data = SearchWords(query, searchMode)
-    local text = "Search (" .. searchMode:upper() .. "): " .. query .. "\n\n"
+    local totalPages = GetPageCount(data.normal, data.custom, pageSize)
 
-    if #data.custom > 0 then
-        text = text .. BuildSection("Custom Words:", data.custom, "") .. "\n\n"
+    if currentPage > totalPages then
+        currentPage = totalPages
+    end
+    if currentPage < 1 then
+        currentPage = 1
     end
 
-    text = text .. BuildSection("Results:", data.normal, "No matches")
+    local pageNormal = SlicePage(data.normal, currentPage, pageSize)
+    local pageCustom = SlicePage(data.custom, currentPage, pageSize)
+
+    local text = "Search (" .. searchMode:upper() .. "): " .. query .. "\nPage " .. currentPage .. "/" .. totalPages .. "\n\n"
+
+    if #pageCustom > 0 then
+        text = text .. BuildSection("Custom Words:", pageCustom, "") .. "\n\n"
+    end
+
+    text = text .. BuildSection("Results:", pageNormal, "No matches")
     return text
 end
 
 local function RenderPrefix(prefix)
-    local text = "Prefix: " .. prefix:upper() .. "\n\n"
+    local totalPages = 1
+    local suggesterData = nil
+    local trapData = nil
 
     if suggesterEnabled then
-        local data = GetSuggestions(prefix)
-        if #data.custom > 0 then
-            text = text .. BuildSection("Custom Words:", data.custom, "") .. "\n\n"
-        end
-        text = text .. BuildSection("Suggestions:", data.normal, "No matches") .. "\n\n"
+        suggesterData = GetSuggestions(prefix)
+        totalPages = math.max(totalPages, GetPageCount(suggesterData.normal, suggesterData.custom, pageSize))
     end
 
     if trapModeEnabled then
-        local data = FindTraps(prefix)
-        if #data.custom > 0 then
-            text = text .. BuildSection("Custom Words:", data.custom, "") .. "\n\n"
+        trapData = FindTraps(prefix)
+        totalPages = math.max(totalPages, GetPageCount(trapData.normal, trapData.custom, pageSize))
+    end
+
+    if currentPage > totalPages then
+        currentPage = totalPages
+    end
+    if currentPage < 1 then
+        currentPage = 1
+    end
+
+    local text = "Prefix: " .. prefix:upper() .. "\nPage " .. currentPage .. "/" .. totalPages .. "\n\n"
+
+    if suggesterEnabled and suggesterData then
+        local pageNormal = SlicePage(suggesterData.normal, currentPage, pageSize)
+        local pageCustom = SlicePage(suggesterData.custom, currentPage, pageSize)
+        if #pageCustom > 0 then
+            text = text .. BuildSection("Custom Words:", pageCustom, "") .. "\n\n"
         end
-        text = text .. BuildSection("Traps:", data.normal, "No traps")
+        text = text .. BuildSection("Suggestions:", pageNormal, "No matches") .. "\n\n"
+    end
+
+    if trapModeEnabled and trapData then
+        local pageNormal = SlicePage(trapData.normal, currentPage, pageSize)
+        local pageCustom = SlicePage(trapData.custom, currentPage, pageSize)
+        if #pageCustom > 0 then
+            text = text .. BuildSection("Custom Words:", pageCustom, "") .. "\n\n"
+        end
+        text = text .. BuildSection("Traps:", pageNormal, "No traps")
     end
 
     if not suggesterEnabled and not trapModeEnabled then
@@ -1025,8 +1184,8 @@ RunService.Heartbeat:Connect(function()
     local needsSearch = query ~= ""
 
     if needsSearch then
-        if query == lastSearch and searchMode == lastSearchMode and lengthPriority == lastPriority and not uiDirty then
-            return
+        if not lastSearchActive or query ~= lastSearch or searchMode ~= lastSearchMode or lengthPriority ~= lastPriority then
+            currentPage = 1
         end
 
         local text = RenderSearch(query)
@@ -1038,9 +1197,15 @@ RunService.Heartbeat:Connect(function()
         lastSearch = query
         lastSearchMode = searchMode
         lastPriority = lengthPriority
+        lastSearchActive = true
         uiDirty = false
         return
     end
+
+    if lastSearchActive then
+        currentPage = 1
+    end
+    lastSearchActive = false
 
     local prefix = GetCurrentPrefix()
     if prefix == "" then
@@ -1052,6 +1217,10 @@ RunService.Heartbeat:Connect(function()
         uiDirty = false
         lastPrefix = ""
         return
+    end
+
+    if prefix ~= lastPrefix then
+        currentPage = 1
     end
 
     if prefix == lastPrefix and not uiDirty and searchMode == lastSearchMode and lengthPriority == lastPriority and suggesterEnabled == lastSuggesterState and trapModeEnabled == lastTrapState then
