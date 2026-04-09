@@ -27,14 +27,10 @@ local dictionaries = {
 
 local WORDS_FILE = "lastletter_full_dict_v3.txt"
 local CUSTOM_WORDS_FILE = "lastletter_custom_words.txt"
-local TYPED_WORDS_FILE = "lastletter_typed_words.txt"
-local HIDDEN_WORDS_FILE = "lastletter_hidden_words.txt"
 
 local Words = {}
 local WordSet = {}
 local CustomWordSet = {}
-local TypedWordSet = {}
-local HiddenWordSet = {}
 local PrefixBuckets1 = {}
 local PrefixBuckets2 = {}
 local PrefixBuckets3 = {}
@@ -48,14 +44,14 @@ local SuffixCountCache = {}
 
 local ManualTrap2 = {}
 for _, v in ipairs({
-	"bs","ez","ff","ft","hm","hs","ht","ie","ii","ks","ld","lm","ls","lt","nd","nn","ns","rf","rl","rm","rp","rs","rt","ue","vy","yl"
+	"bs", "ez", "ff", "ft", "hm", "hs", "ht", "ie", "ii", "ks", "ld", "lm", "ls", "lt", "nd", "nn", "ns", "rf", "rl", "rm", "rp", "rs", "rt", "ue", "vy", "yl"
 }) do
 	ManualTrap2[v] = true
 end
 
 local ManualTrap3 = {}
 for _, v in ipairs({
-	"amh","anz","iga","keh","kup","rua"
+	"amh", "anz", "iga", "keh", "kup", "rua"
 }) do
 	ManualTrap3[v] = true
 end
@@ -72,60 +68,12 @@ local function ClearCaches()
 	SuffixCountCache = {}
 end
 
-local function CountSet(t)
+local function CountCustomWords()
 	local c = 0
-	for _ in pairs(t) do
+	for _ in pairs(CustomWordSet) do
 		c += 1
 	end
 	return c
-end
-
-local function CountCustomWords()
-	return CountSet(CustomWordSet)
-end
-
-local function SaveWordSet(fileName, setTable)
-	local list = {}
-	for word in pairs(setTable) do
-		table.insert(list, word)
-	end
-	table.sort(list)
-	writefile(fileName, table.concat(list, "\n"))
-end
-
-local function LoadWordSet(fileName, setTable)
-	if not isfile(fileName) then
-		return
-	end
-
-	local content = readfile(fileName)
-	for word in content:gmatch("%S+") do
-		setTable[word:lower()] = true
-	end
-end
-
-local function MarkWordTyped(word)
-	word = tostring(word or ""):lower()
-	if word == "" then
-		return
-	end
-	if not TypedWordSet[word] then
-		TypedWordSet[word] = true
-		SaveWordSet(TYPED_WORDS_FILE, TypedWordSet)
-		ClearCaches()
-	end
-end
-
-local function UntypeWord(word)
-	word = tostring(word or ""):lower()
-	if word == "" then
-		return
-	end
-	if TypedWordSet[word] then
-		TypedWordSet[word] = nil
-		SaveWordSet(TYPED_WORDS_FILE, TypedWordSet)
-		ClearCaches()
-	end
 end
 
 local function AddWordToBuckets(word, isCustom)
@@ -151,12 +99,24 @@ local function AddWordToBuckets(word, isCustom)
 		local s2 = word:sub(-2)
 		local s3 = word:sub(-3)
 
-		if #p1 == 1 then AddToBucket(PrefixBuckets1, p1, word) end
-		if #p2 == 2 then AddToBucket(PrefixBuckets2, p2, word) end
-		if #p3 == 3 then AddToBucket(PrefixBuckets3, p3, word) end
-		if #s1 == 1 then AddToBucket(SuffixBuckets1, s1, word) end
-		if #s2 == 2 then AddToBucket(SuffixBuckets2, s2, word) end
-		if #s3 == 3 then AddToBucket(SuffixBuckets3, s3, word) end
+		if #p1 == 1 then
+			AddToBucket(PrefixBuckets1, p1, word)
+		end
+		if #p2 == 2 then
+			AddToBucket(PrefixBuckets2, p2, word)
+		end
+		if #p3 == 3 then
+			AddToBucket(PrefixBuckets3, p3, word)
+		end
+		if #s1 == 1 then
+			AddToBucket(SuffixBuckets1, s1, word)
+		end
+		if #s2 == 2 then
+			AddToBucket(SuffixBuckets2, s2, word)
+		end
+		if #s3 == 3 then
+			AddToBucket(SuffixBuckets3, s3, word)
+		end
 	end
 
 	if isCustom then
@@ -228,21 +188,54 @@ local function LoadDictionaries()
 end
 
 local function LoadCustomWords()
-	if isfile(CUSTOM_WORDS_FILE) then
-		local content = readfile(CUSTOM_WORDS_FILE)
-		for word in content:gmatch("%S+") do
-			AddWordToBuckets(word, true)
-		end
+	if not isfile(CUSTOM_WORDS_FILE) then
+		return
 	end
 
-	LoadWordSet(TYPED_WORDS_FILE, TypedWordSet)
-	LoadWordSet(HIDDEN_WORDS_FILE, HiddenWordSet)
+	local content = readfile(CUSTOM_WORDS_FILE)
+	for word in content:gmatch("%S+") do
+		AddWordToBuckets(word, true)
+	end
+
 	ClearCaches()
 	print("Loaded custom words: " .. tostring(CountCustomWords()))
 end
 
+local function SaveCustomWords()
+	local list = {}
+	for word in pairs(CustomWordSet) do
+		table.insert(list, word)
+	end
+	table.sort(list)
+	writefile(CUSTOM_WORDS_FILE, table.concat(list, "\n"))
+end
+
 LoadDictionaries()
 LoadCustomWords()
+
+do
+	local saved = false
+
+	local function SaveOnce()
+		if saved then
+			return
+		end
+		saved = true
+		pcall(SaveCustomWords)
+	end
+
+	player.AncestryChanged:Connect(function(_, parent)
+		if parent == nil then
+			SaveOnce()
+		end
+	end)
+
+	pcall(function()
+		game:BindToClose(function()
+			SaveOnce()
+		end)
+	end)
+end
 
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "LastLetterOptimizedFullGUI"
@@ -251,8 +244,8 @@ screenGui.IgnoreGuiInset = true
 screenGui.Parent = playerGui
 
 local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, 420, 0, 360)
-mainFrame.Position = UDim2.new(1, -440, 0.5, -180)
+mainFrame.Size = UDim2.new(0, 360, 0, 295)
+mainFrame.Position = UDim2.new(1, -380, 0.5, -147)
 mainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
 mainFrame.BackgroundTransparency = 0.05
 mainFrame.BorderSizePixel = 0
@@ -263,13 +256,13 @@ mainCorner.CornerRadius = UDim.new(0, 12)
 mainCorner.Parent = mainFrame
 
 local titleBar = Instance.new("TextLabel")
-titleBar.Size = UDim2.new(1, 0, 0, 40)
+titleBar.Size = UDim2.new(1, 0, 0, 34)
 titleBar.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
 titleBar.BorderSizePixel = 0
-titleBar.Text = "Last Letter Helper - Optimized Full"
+titleBar.Text = "Last Letter Helper"
 titleBar.TextColor3 = Color3.new(1, 1, 1)
 titleBar.Font = Enum.Font.GothamBold
-titleBar.TextSize = 18
+titleBar.TextSize = 16
 titleBar.Active = true
 titleBar.Parent = mainFrame
 
@@ -308,25 +301,25 @@ UserInputService.InputChanged:Connect(function(input)
 end)
 
 local buttonFrame = Instance.new("Frame")
-buttonFrame.Size = UDim2.new(0, 185, 0, 275)
-buttonFrame.Position = UDim2.new(0, 12, 0, 50)
+buttonFrame.Size = UDim2.new(0, 150, 0, 220)
+buttonFrame.Position = UDim2.new(0, 10, 0, 40)
 buttonFrame.BackgroundTransparency = 1
 buttonFrame.Parent = mainFrame
 
 local buttonLayout = Instance.new("UIListLayout")
-buttonLayout.Padding = UDim.new(0, 8)
+buttonLayout.Padding = UDim.new(0, 6)
 buttonLayout.SortOrder = Enum.SortOrder.LayoutOrder
 buttonLayout.Parent = buttonFrame
 
 local searchBox = Instance.new("TextBox")
-searchBox.Size = UDim2.new(0, 145, 0, 32)
-searchBox.Position = UDim2.new(0, 205, 0, 50)
+searchBox.Size = UDim2.new(0, 115, 0, 28)
+searchBox.Position = UDim2.new(0, 165, 0, 40)
 searchBox.PlaceholderText = "Search..."
 searchBox.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
 searchBox.BorderSizePixel = 0
 searchBox.TextColor3 = Color3.new(1, 1, 1)
 searchBox.Font = Enum.Font.Gotham
-searchBox.TextSize = 14
+searchBox.TextSize = 13
 searchBox.ClearTextOnFocus = false
 searchBox.Text = ""
 searchBox.Parent = mainFrame
@@ -336,14 +329,14 @@ searchBoxCorner.CornerRadius = UDim.new(0, 6)
 searchBoxCorner.Parent = searchBox
 
 local modeBtn = Instance.new("TextButton")
-modeBtn.Size = UDim2.new(0, 45, 0, 32)
-modeBtn.Position = UDim2.new(0, 355, 0, 50)
+modeBtn.Size = UDim2.new(0, 40, 0, 28)
+modeBtn.Position = UDim2.new(0, 285, 0, 40)
 modeBtn.Text = "Word"
 modeBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 80)
 modeBtn.BorderSizePixel = 0
 modeBtn.TextColor3 = Color3.new(1, 1, 1)
 modeBtn.Font = Enum.Font.GothamSemibold
-modeBtn.TextSize = 12
+modeBtn.TextSize = 11
 modeBtn.Parent = mainFrame
 
 local modeBtnCorner = Instance.new("UICorner")
@@ -351,11 +344,11 @@ modeBtnCorner.CornerRadius = UDim.new(0, 6)
 modeBtnCorner.Parent = modeBtn
 
 local resultsFrame = Instance.new("ScrollingFrame")
-resultsFrame.Size = UDim2.new(0, 205, 0, 240)
-resultsFrame.Position = UDim2.new(0, 205, 0, 90)
+resultsFrame.Size = UDim2.new(0, 180, 0, 204)
+resultsFrame.Position = UDim2.new(0, 165, 0, 74)
 resultsFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
 resultsFrame.BorderSizePixel = 0
-resultsFrame.ScrollBarThickness = 6
+resultsFrame.ScrollBarThickness = 5
 resultsFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
 resultsFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
 resultsFrame.ClipsDescendants = true
@@ -366,14 +359,14 @@ resultsCorner.CornerRadius = UDim.new(0, 8)
 resultsCorner.Parent = resultsFrame
 
 local resultsPadding = Instance.new("UIPadding")
-resultsPadding.PaddingTop = UDim.new(0, 6)
-resultsPadding.PaddingBottom = UDim.new(0, 6)
-resultsPadding.PaddingLeft = UDim.new(0, 6)
-resultsPadding.PaddingRight = UDim.new(0, 6)
+resultsPadding.PaddingTop = UDim.new(0, 5)
+resultsPadding.PaddingBottom = UDim.new(0, 5)
+resultsPadding.PaddingLeft = UDim.new(0, 5)
+resultsPadding.PaddingRight = UDim.new(0, 5)
 resultsPadding.Parent = resultsFrame
 
 local resultsLayout = Instance.new("UIListLayout")
-resultsLayout.Padding = UDim.new(0, 6)
+resultsLayout.Padding = UDim.new(0, 5)
 resultsLayout.SortOrder = Enum.SortOrder.LayoutOrder
 resultsLayout.Parent = resultsFrame
 
@@ -403,13 +396,13 @@ end
 
 local function MakeButton(text)
 	local btn = Instance.new("TextButton")
-	btn.Size = UDim2.new(1, 0, 0, 40)
+	btn.Size = UDim2.new(1, 0, 0, 34)
 	btn.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
 	btn.BorderSizePixel = 0
 	btn.Text = text
 	btn.TextColor3 = Color3.new(1, 1, 1)
 	btn.Font = Enum.Font.GothamSemibold
-	btn.TextSize = 15
+	btn.TextSize = 13
 	btn.Parent = buttonFrame
 
 	local corner = Instance.new("UICorner")
@@ -540,10 +533,6 @@ local function SlicePage(items, page, size)
 	return result
 end
 
-local function FilterAllowed(word)
-	return not HiddenWordSet[word] and not TypedWordSet[word]
-end
-
 local function GetSuggestions(prefix)
 	if SuggestionCache[prefix] then
 		return SuggestionCache[prefix]
@@ -553,7 +542,7 @@ local function GetSuggestions(prefix)
 	local custom = {}
 
 	for _, word in ipairs(GetPrefixCandidates(prefix)) do
-		if FilterAllowed(word) and word:sub(1, #prefix) == prefix and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
+		if word:sub(1, #prefix) == prefix and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
 			if CustomWordSet[word] then
 				table.insert(custom, word)
 			else
@@ -655,7 +644,7 @@ local function SearchWords(query, mode)
 
 	if mode == "word" then
 		for _, word in ipairs(Words) do
-			if FilterAllowed(word) and word:find(query, 1, true) and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
+			if word:find(query, 1, true) and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
 				if CustomWordSet[word] then
 					table.insert(custom, word)
 				else
@@ -665,7 +654,7 @@ local function SearchWords(query, mode)
 		end
 	elseif mode == "prefix" then
 		for _, word in ipairs(GetPrefixCandidates(query)) do
-			if FilterAllowed(word) and word:sub(1, #query) == query and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
+			if word:sub(1, #query) == query and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
 				if CustomWordSet[word] then
 					table.insert(custom, word)
 				else
@@ -675,7 +664,7 @@ local function SearchWords(query, mode)
 		end
 	elseif mode == "suffix" then
 		for _, word in ipairs(GetSuffixCandidates(query)) do
-			if FilterAllowed(word) and word:sub(-#query) == query and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
+			if word:sub(-#query) == query and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
 				if CustomWordSet[word] then
 					table.insert(custom, word)
 				else
@@ -733,14 +722,17 @@ local function GetActivePageCount()
 	end
 
 	local totalPages = 1
+
 	if suggesterEnabled then
 		local data = GetSuggestions(prefix)
 		totalPages = math.max(totalPages, GetPageCount(data.normal, data.custom, pageSize))
 	end
+
 	if trapModeEnabled then
 		local data = FindTraps(prefix)
 		totalPages = math.max(totalPages, GetPageCount(data.normal, data.custom, pageSize))
 	end
+
 	return totalPages
 end
 
@@ -754,12 +746,12 @@ end
 
 local function MakeHeader(text)
 	local label = Instance.new("TextLabel")
-	label.Size = UDim2.new(1, 0, 0, 22)
+	label.Size = UDim2.new(1, 0, 0, 18)
 	label.BackgroundTransparency = 1
 	label.Text = text
 	label.TextColor3 = Color3.new(1, 1, 1)
 	label.Font = Enum.Font.GothamBold
-	label.TextSize = 14
+	label.TextSize = 12
 	label.TextXAlignment = Enum.TextXAlignment.Left
 	label.Parent = resultsFrame
 	return label
@@ -767,15 +759,60 @@ end
 
 local function MakeEmpty(text)
 	local label = Instance.new("TextLabel")
-	label.Size = UDim2.new(1, 0, 0, 22)
+	label.Size = UDim2.new(1, 0, 0, 18)
 	label.BackgroundTransparency = 1
 	label.Text = text
 	label.TextColor3 = Color3.fromRGB(210, 210, 210)
 	label.Font = Enum.Font.Gotham
-	label.TextSize = 13
+	label.TextSize = 11
 	label.TextXAlignment = Enum.TextXAlignment.Left
 	label.Parent = resultsFrame
 	return label
+end
+
+local function VkToKeyCode(vk)
+	if vk == 0x10 then
+		return Enum.KeyCode.LeftShift
+	end
+	if vk == 0x0D then
+		return Enum.KeyCode.Return
+	end
+	local ch = string.char(vk)
+	return Enum.KeyCode[ch]
+end
+
+local function PressVk(vk)
+	local ok = false
+	if type(keypress) == "function" then
+		ok = pcall(function()
+			keypress(vk)
+		end)
+	end
+	if not ok then
+		local keyCode = VkToKeyCode(vk)
+		if keyCode then
+			pcall(function()
+				VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+			end)
+		end
+	end
+end
+
+local function ReleaseVk(vk)
+	local ok = false
+	if type(keyrelease) == "function" then
+		ok = pcall(function()
+			keyrelease(vk)
+		end)
+	end
+	if not ok then
+		local keyCode = VkToKeyCode(vk)
+		if keyCode then
+			pcall(function()
+				VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+			end)
+		end
+	end
 end
 
 local function FocusAwayFromSearch()
@@ -791,60 +828,16 @@ local function FocusAwayFromSearch()
 	task.wait()
 end
 
-local function PressKey(vk)
-	local ok = false
-	if type(keypress) == "function" then
-		ok = pcall(function()
-			keypress(vk)
-		end)
-	end
-	if not ok then
-		local keyCode
-		if vk == 0x10 then
-			keyCode = Enum.KeyCode.LeftShift
-		elseif vk == 0x0D then
-			keyCode = Enum.KeyCode.Return
-		else
-			keyCode = Enum.KeyCode[string.char(vk)]
-		end
-		pcall(function()
-			VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
-		end)
-	end
-end
-
-local function ReleaseKey(vk)
-	local ok = false
-	if type(keyrelease) == "function" then
-		ok = pcall(function()
-			keyrelease(vk)
-		end)
-	end
-	if not ok then
-		local keyCode
-		if vk == 0x10 then
-			keyCode = Enum.KeyCode.LeftShift
-		elseif vk == 0x0D then
-			keyCode = Enum.KeyCode.Return
-		else
-			keyCode = Enum.KeyCode[string.char(vk)]
-		end
-		pcall(function()
-			VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
-		end)
-	end
-end
-
-local function StripCurrentPrefix(word, prefix)
+local function StripCurrentPrefix(word)
 	word = tostring(word or "")
-	prefix = tostring(prefix or ""):lower()
+	local prefix = GetCurrentPrefix()
 	if prefix ~= "" and word:sub(1, #prefix):lower() == prefix then
 		return word:sub(#prefix + 1)
 	end
 	return word
 end
 
-local function TypeWordHumanized(word, prefix)
+local function TypeWordHumanized(word)
 	if typingLock then
 		return
 	end
@@ -853,24 +846,21 @@ local function TypeWordHumanized(word, prefix)
 	task.spawn(function()
 		local ok, err = pcall(function()
 			FocusAwayFromSearch()
-			task.wait(0.03)
 
-			word = StripCurrentPrefix(word, prefix)
-			word = tostring(word or "")
+			word = StripCurrentPrefix(word)
+			word = tostring(word or ""):lower()
 
 			if #word == 0 then
 				return
 			end
 
-			word = word:lower()
-
 			for i = 1, #word do
 				local char = word:sub(i, i)
 				if char:match("%a") then
 					local vk = string.byte(char:upper())
-					PressKey(vk)
+					PressVk(vk)
 					task.wait(math.random(12, 30) / 1000)
-					ReleaseKey(vk)
+					ReleaseVk(vk)
 				end
 
 				local delay = math.random() * (maxDelay - minDelay) + minDelay
@@ -884,9 +874,9 @@ local function TypeWordHumanized(word, prefix)
 			end
 
 			task.wait(math.random(1, 16) / 100)
-			PressKey(0x0D)
-			task.wait(math.random(1, 4) / 1000)
-			ReleaseKey(0x0D)
+			PressVk(0x0D)
+			task.wait(math.random(1, 2) / 1000)
+			ReleaseVk(0x0D)
 		end)
 
 		if not ok then
@@ -899,13 +889,13 @@ end
 
 local function MakeWordButton(parent, text, value)
 	local btn = Instance.new("TextButton")
-	btn.Size = UDim2.new(0.32, -2, 0, 28)
-	btn.BackgroundColor3 = TypedWordSet[value] and Color3.fromRGB(0, 170, 80) or Color3.fromRGB(45, 45, 55)
+	btn.Size = UDim2.new(0.32, -2, 0, 24)
+	btn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
 	btn.BorderSizePixel = 0
 	btn.Text = text
 	btn.TextColor3 = Color3.new(1, 1, 1)
 	btn.Font = Enum.Font.Gotham
-	btn.TextSize = 11
+	btn.TextSize = 10
 	btn.TextWrapped = true
 	btn.Parent = parent
 
@@ -914,16 +904,8 @@ local function MakeWordButton(parent, text, value)
 	corner.Parent = btn
 
 	btn.MouseButton1Click:Connect(function()
-		if TypedWordSet[value] then
-			UntypeWord(value)
-			MarkDirty()
-			return
-		end
-
 		if autoTypeEnabled and value and value ~= "" then
-			MarkWordTyped(value)
-			TypeWordHumanized(value, GetCurrentPrefix())
-			MarkDirty()
+			TypeWordHumanized(value)
 		else
 			searchBox.Text = value or ""
 		end
@@ -934,7 +916,7 @@ end
 
 local function MakeRow(entries)
 	local row = Instance.new("Frame")
-	row.Size = UDim2.new(1, 0, 0, 30)
+	row.Size = UDim2.new(1, 0, 0, 26)
 	row.BackgroundTransparency = 1
 	row.Parent = resultsFrame
 
@@ -972,8 +954,8 @@ local function BuildSectionItems(title, entries, emptyText)
 end
 
 settingsFrame = Instance.new("Frame")
-settingsFrame.Size = UDim2.new(0, 350, 0, 430)
-settingsFrame.Position = UDim2.new(0.5, -175, 0.5, -215)
+settingsFrame.Size = UDim2.new(0, 290, 0, 330)
+settingsFrame.Position = UDim2.new(0.5, -145, 0.5, -165)
 settingsFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
 settingsFrame.BorderSizePixel = 0
 settingsFrame.Visible = false
@@ -984,13 +966,13 @@ settingsCorner.CornerRadius = UDim.new(0, 12)
 settingsCorner.Parent = settingsFrame
 
 local sfTitle = Instance.new("TextLabel")
-sfTitle.Size = UDim2.new(1, 0, 0, 40)
+sfTitle.Size = UDim2.new(1, 0, 0, 34)
 sfTitle.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
 sfTitle.BorderSizePixel = 0
 sfTitle.Text = "Settings"
 sfTitle.TextColor3 = Color3.new(1, 1, 1)
 sfTitle.Font = Enum.Font.GothamBold
-sfTitle.TextSize = 18
+sfTitle.TextSize = 16
 sfTitle.Parent = settingsFrame
 
 local sfTitleCorner = Instance.new("UICorner")
@@ -998,28 +980,28 @@ sfTitleCorner.CornerRadius = UDim.new(0, 12)
 sfTitleCorner.Parent = sfTitle
 
 local settingsScroll = Instance.new("ScrollingFrame")
-settingsScroll.Size = UDim2.new(1, -20, 1, -50)
-settingsScroll.Position = UDim2.new(0, 10, 0, 45)
+settingsScroll.Size = UDim2.new(1, -14, 1, -42)
+settingsScroll.Position = UDim2.new(0, 7, 0, 38)
 settingsScroll.BackgroundTransparency = 1
 settingsScroll.BorderSizePixel = 0
-settingsScroll.ScrollBarThickness = 6
+settingsScroll.ScrollBarThickness = 5
 settingsScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
 settingsScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
 settingsScroll.Parent = settingsFrame
 
 local settingsPadding = Instance.new("UIPadding")
-settingsPadding.PaddingRight = UDim.new(0, 4)
-settingsPadding.PaddingBottom = UDim.new(0, 10)
+settingsPadding.PaddingRight = UDim.new(0, 3)
+settingsPadding.PaddingBottom = UDim.new(0, 6)
 settingsPadding.Parent = settingsScroll
 
 local settingsLayout = Instance.new("UIListLayout")
-settingsLayout.Padding = UDim.new(0, 8)
+settingsLayout.Padding = UDim.new(0, 7)
 settingsLayout.SortOrder = Enum.SortOrder.LayoutOrder
 settingsLayout.Parent = settingsScroll
 
 local function makeRow(labelText, defaultValue)
 	local row = Instance.new("Frame")
-	row.Size = UDim2.new(1, 0, 0, 30)
+	row.Size = UDim2.new(1, 0, 0, 28)
 	row.BackgroundTransparency = 1
 	row.Parent = settingsScroll
 
@@ -1029,7 +1011,7 @@ local function makeRow(labelText, defaultValue)
 	label.Text = labelText
 	label.TextColor3 = Color3.new(1, 1, 1)
 	label.Font = Enum.Font.Gotham
-	label.TextSize = 15
+	label.TextSize = 13
 	label.TextXAlignment = Enum.TextXAlignment.Left
 	label.Parent = row
 
@@ -1041,7 +1023,7 @@ local function makeRow(labelText, defaultValue)
 	box.BorderSizePixel = 0
 	box.TextColor3 = Color3.new(1, 1, 1)
 	box.Font = Enum.Font.Gotham
-	box.TextSize = 15
+	box.TextSize = 13
 	box.ClearTextOnFocus = false
 	box.Parent = row
 
@@ -1079,7 +1061,7 @@ maxBox.FocusLost:Connect(function()
 end)
 
 local priorityRow = Instance.new("Frame")
-priorityRow.Size = UDim2.new(1, 0, 0, 30)
+priorityRow.Size = UDim2.new(1, 0, 0, 28)
 priorityRow.BackgroundTransparency = 1
 priorityRow.Parent = settingsScroll
 
@@ -1089,7 +1071,7 @@ priorityLabel.BackgroundTransparency = 1
 priorityLabel.Text = "Length Prioritize:"
 priorityLabel.TextColor3 = Color3.new(1, 1, 1)
 priorityLabel.Font = Enum.Font.Gotham
-priorityLabel.TextSize = 15
+priorityLabel.TextSize = 13
 priorityLabel.TextXAlignment = Enum.TextXAlignment.Left
 priorityLabel.Parent = priorityRow
 
@@ -1100,7 +1082,7 @@ priorityBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 80)
 priorityBtn.BorderSizePixel = 0
 priorityBtn.TextColor3 = Color3.new(1, 1, 1)
 priorityBtn.Font = Enum.Font.GothamSemibold
-priorityBtn.TextSize = 14
+priorityBtn.TextSize = 13
 priorityBtn.Parent = priorityRow
 
 local priorityCorner = Instance.new("UICorner")
@@ -1136,42 +1118,47 @@ end)
 
 UpdatePriorityButton()
 
+local customBlock = Instance.new("Frame")
+customBlock.Size = UDim2.new(1, 0, 0, 68)
+customBlock.BackgroundTransparency = 1
+customBlock.Parent = settingsScroll
+
 local customLabel = Instance.new("TextLabel")
-customLabel.Size = UDim2.new(1, 0, 0, 30)
+customLabel.Size = UDim2.new(1, 0, 0, 16)
 customLabel.BackgroundTransparency = 1
 customLabel.Text = "Add Custom Words"
 customLabel.TextColor3 = Color3.new(1, 1, 1)
 customLabel.Font = Enum.Font.Gotham
-customLabel.TextSize = 15
+customLabel.TextSize = 13
 customLabel.TextXAlignment = Enum.TextXAlignment.Left
-customLabel.Parent = settingsScroll
+customLabel.Parent = customBlock
 
 local customBox = Instance.new("TextBox")
-customBox.Size = UDim2.new(0.7, 0, 0, 30)
-customBox.Position = UDim2.new(0, 0, 0, 35)
+customBox.Size = UDim2.new(0.7, 0, 0, 28)
+customBox.Position = UDim2.new(0, 0, 0, 20)
 customBox.PlaceholderText = "word1,word2,word3"
 customBox.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
 customBox.BorderSizePixel = 0
 customBox.TextColor3 = Color3.new(1, 1, 1)
 customBox.Font = Enum.Font.Gotham
-customBox.TextSize = 14
+customBox.TextSize = 13
 customBox.ClearTextOnFocus = false
-customBox.Parent = customLabel
+customBox.Parent = customBlock
 
 local customBoxCorner = Instance.new("UICorner")
 customBoxCorner.CornerRadius = UDim.new(0, 6)
 customBoxCorner.Parent = customBox
 
 local addCustomBtn = Instance.new("TextButton")
-addCustomBtn.Size = UDim2.new(0.28, 0, 0, 30)
-addCustomBtn.Position = UDim2.new(0.72, 0, 0, 35)
+addCustomBtn.Size = UDim2.new(0.28, 0, 0, 28)
+addCustomBtn.Position = UDim2.new(0.72, 0, 0, 20)
 addCustomBtn.Text = "Add"
 addCustomBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 80)
 addCustomBtn.BorderSizePixel = 0
 addCustomBtn.TextColor3 = Color3.new(1, 1, 1)
 addCustomBtn.Font = Enum.Font.GothamSemibold
-addCustomBtn.TextSize = 14
-addCustomBtn.Parent = customLabel
+addCustomBtn.TextSize = 13
+addCustomBtn.Parent = customBlock
 
 local addCustomCorner = Instance.new("UICorner")
 addCustomCorner.CornerRadius = UDim.new(0, 6)
@@ -1194,27 +1181,20 @@ addCustomBtn.MouseButton1Click:Connect(function()
 	ResetPagination()
 
 	if addedAny then
-		pcall(function()
-			SaveWordSet(CUSTOM_WORDS_FILE, CustomWordSet)
-		end)
+		pcall(SaveCustomWords)
 	end
 
 	MarkDirty()
 	print("Custom words updated: " .. tostring(CountCustomWords()))
 end)
 
-local spacer = Instance.new("Frame")
-spacer.Size = UDim2.new(1, 0, 0, 8)
-spacer.BackgroundTransparency = 1
-spacer.Parent = settingsScroll
-
 local autoTypeBtn = Instance.new("TextButton")
-autoTypeBtn.Size = UDim2.new(1, 0, 0, 30)
+autoTypeBtn.Size = UDim2.new(1, 0, 0, 28)
 autoTypeBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
 autoTypeBtn.BorderSizePixel = 0
 autoTypeBtn.TextColor3 = Color3.new(1, 1, 1)
 autoTypeBtn.Font = Enum.Font.GothamSemibold
-autoTypeBtn.TextSize = 14
+autoTypeBtn.TextSize = 13
 autoTypeBtn.Parent = settingsScroll
 
 local autoTypeCorner = Instance.new("UICorner")
@@ -1240,7 +1220,7 @@ end)
 UpdateAutoTypeButton()
 
 local minDelayRow = Instance.new("Frame")
-minDelayRow.Size = UDim2.new(1, 0, 0, 30)
+minDelayRow.Size = UDim2.new(1, 0, 0, 28)
 minDelayRow.BackgroundTransparency = 1
 minDelayRow.Parent = settingsScroll
 
@@ -1250,7 +1230,7 @@ minDelayLabel.BackgroundTransparency = 1
 minDelayLabel.Text = "Delay Min:"
 minDelayLabel.TextColor3 = Color3.new(1, 1, 1)
 minDelayLabel.Font = Enum.Font.Gotham
-minDelayLabel.TextSize = 15
+minDelayLabel.TextSize = 13
 minDelayLabel.TextXAlignment = Enum.TextXAlignment.Left
 minDelayLabel.Parent = minDelayRow
 
@@ -1262,7 +1242,7 @@ minDelayBox.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
 minDelayBox.BorderSizePixel = 0
 minDelayBox.TextColor3 = Color3.new(1, 1, 1)
 minDelayBox.Font = Enum.Font.Gotham
-minDelayBox.TextSize = 15
+minDelayBox.TextSize = 13
 minDelayBox.ClearTextOnFocus = false
 minDelayBox.Parent = minDelayRow
 
@@ -1285,7 +1265,7 @@ minDelayBox.FocusLost:Connect(function()
 end)
 
 local maxDelayRow = Instance.new("Frame")
-maxDelayRow.Size = UDim2.new(1, 0, 0, 30)
+maxDelayRow.Size = UDim2.new(1, 0, 0, 28)
 maxDelayRow.BackgroundTransparency = 1
 maxDelayRow.Parent = settingsScroll
 
@@ -1295,7 +1275,7 @@ maxDelayLabel.BackgroundTransparency = 1
 maxDelayLabel.Text = "Delay Max:"
 maxDelayLabel.TextColor3 = Color3.new(1, 1, 1)
 maxDelayLabel.Font = Enum.Font.Gotham
-maxDelayLabel.TextSize = 15
+maxDelayLabel.TextSize = 13
 maxDelayLabel.TextXAlignment = Enum.TextXAlignment.Left
 maxDelayLabel.Parent = maxDelayRow
 
@@ -1307,7 +1287,7 @@ maxDelayBox.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
 maxDelayBox.BorderSizePixel = 0
 maxDelayBox.TextColor3 = Color3.new(1, 1, 1)
 maxDelayBox.Font = Enum.Font.Gotham
-maxDelayBox.TextSize = 15
+maxDelayBox.TextSize = 13
 maxDelayBox.ClearTextOnFocus = false
 maxDelayBox.Parent = maxDelayRow
 
