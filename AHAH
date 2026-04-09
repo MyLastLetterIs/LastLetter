@@ -116,14 +116,14 @@ local function MarkWordTyped(word)
 	end
 end
 
-local function HideWord(word)
+local function UntypeWord(word)
 	word = tostring(word or ""):lower()
 	if word == "" then
 		return
 	end
-	if not HiddenWordSet[word] then
-		HiddenWordSet[word] = true
-		SaveWordSet(HIDDEN_WORDS_FILE, HiddenWordSet)
+	if TypedWordSet[word] then
+		TypedWordSet[word] = nil
+		SaveWordSet(TYPED_WORDS_FILE, TypedWordSet)
 		ClearCaches()
 	end
 end
@@ -540,6 +540,10 @@ local function SlicePage(items, page, size)
 	return result
 end
 
+local function FilterAllowed(word)
+	return not HiddenWordSet[word] and not TypedWordSet[word]
+end
+
 local function GetSuggestions(prefix)
 	if SuggestionCache[prefix] then
 		return SuggestionCache[prefix]
@@ -549,7 +553,7 @@ local function GetSuggestions(prefix)
 	local custom = {}
 
 	for _, word in ipairs(GetPrefixCandidates(prefix)) do
-		if not HiddenWordSet[word] and word:sub(1, #prefix) == prefix and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
+		if FilterAllowed(word) and word:sub(1, #prefix) == prefix and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
 			if CustomWordSet[word] then
 				table.insert(custom, word)
 			else
@@ -651,7 +655,7 @@ local function SearchWords(query, mode)
 
 	if mode == "word" then
 		for _, word in ipairs(Words) do
-			if not HiddenWordSet[word] and word:find(query, 1, true) and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
+			if FilterAllowed(word) and word:find(query, 1, true) and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
 				if CustomWordSet[word] then
 					table.insert(custom, word)
 				else
@@ -661,7 +665,7 @@ local function SearchWords(query, mode)
 		end
 	elseif mode == "prefix" then
 		for _, word in ipairs(GetPrefixCandidates(query)) do
-			if not HiddenWordSet[word] and word:sub(1, #query) == query and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
+			if FilterAllowed(word) and word:sub(1, #query) == query and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
 				if CustomWordSet[word] then
 					table.insert(custom, word)
 				else
@@ -671,7 +675,7 @@ local function SearchWords(query, mode)
 		end
 	elseif mode == "suffix" then
 		for _, word in ipairs(GetSuffixCandidates(query)) do
-			if not HiddenWordSet[word] and word:sub(-#query) == query and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
+			if FilterAllowed(word) and word:sub(-#query) == query and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
 				if CustomWordSet[word] then
 					table.insert(custom, word)
 				else
@@ -896,7 +900,7 @@ end
 local function MakeWordButton(parent, text, value)
 	local btn = Instance.new("TextButton")
 	btn.Size = UDim2.new(0.32, -2, 0, 28)
-	btn.BackgroundColor3 = HiddenWordSet[value] and Color3.fromRGB(80, 80, 80) or (TypedWordSet[value] and Color3.fromRGB(0, 170, 80) or Color3.fromRGB(45, 45, 55))
+	btn.BackgroundColor3 = TypedWordSet[value] and Color3.fromRGB(0, 170, 80) or Color3.fromRGB(45, 45, 55)
 	btn.BorderSizePixel = 0
 	btn.Text = text
 	btn.TextColor3 = Color3.new(1, 1, 1)
@@ -910,12 +914,8 @@ local function MakeWordButton(parent, text, value)
 	corner.Parent = btn
 
 	btn.MouseButton1Click:Connect(function()
-		if HiddenWordSet[value] then
-			return
-		end
-
 		if TypedWordSet[value] then
-			HideWord(value)
+			UntypeWord(value)
 			MarkDirty()
 			return
 		end
@@ -996,25 +996,6 @@ sfTitle.Parent = settingsFrame
 local sfTitleCorner = Instance.new("UICorner")
 sfTitleCorner.CornerRadius = UDim.new(0, 12)
 sfTitleCorner.Parent = sfTitle
-
-local closeX = Instance.new("TextButton")
-closeX.Size = UDim2.new(0, 32, 0, 32)
-closeX.Position = UDim2.new(1, -37, 0, 4)
-closeX.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-closeX.BorderSizePixel = 0
-closeX.Text = "X"
-closeX.TextColor3 = Color3.new(1, 1, 1)
-closeX.Font = Enum.Font.GothamBold
-closeX.TextSize = 20
-closeX.Parent = settingsFrame
-
-local closeCorner = Instance.new("UICorner")
-closeCorner.CornerRadius = UDim.new(0, 6)
-closeCorner.Parent = closeX
-
-closeX.MouseButton1Click:Connect(function()
-	settingsFrame.Visible = false
-end)
 
 local settingsScroll = Instance.new("ScrollingFrame")
 settingsScroll.Size = UDim2.new(1, -20, 1, -50)
