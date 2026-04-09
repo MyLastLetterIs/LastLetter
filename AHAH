@@ -25,12 +25,16 @@ local dictionaries = {
 	"https://raw.githubusercontent.com/MyLastLetterIs/longwords/refs/heads/main/extremely-long-words"
 }
 
-local WORDS_FILE = "lastletter_full_dict_v2.txt"
+local WORDS_FILE = "lastletter_full_dict_v3.txt"
 local CUSTOM_WORDS_FILE = "lastletter_custom_words.txt"
+local TYPED_WORDS_FILE = "lastletter_typed_words.txt"
+local HIDDEN_WORDS_FILE = "lastletter_hidden_words.txt"
 
 local Words = {}
 local WordSet = {}
 local CustomWordSet = {}
+local TypedWordSet = {}
+local HiddenWordSet = {}
 local PrefixBuckets1 = {}
 local PrefixBuckets2 = {}
 local PrefixBuckets3 = {}
@@ -44,14 +48,14 @@ local SuffixCountCache = {}
 
 local ManualTrap2 = {}
 for _, v in ipairs({
-	"bs", "ez", "ff", "ft", "hm", "hs", "ht", "ie", "ii", "ks", "ld", "lm", "ls", "lt", "nd", "nn", "ns", "rf", "rl", "rm", "rp", "rs", "rt", "ue", "vy", "yl"
+	"bs","ez","ff","ft","hm","hs","ht","ie","ii","ks","ld","lm","ls","lt","nd","nn","ns","rf","rl","rm","rp","rs","rt","ue","vy","yl"
 }) do
 	ManualTrap2[v] = true
 end
 
 local ManualTrap3 = {}
 for _, v in ipairs({
-	"amh", "anz", "iga", "keh", "kup", "rua"
+	"amh","anz","iga","keh","kup","rua"
 }) do
 	ManualTrap3[v] = true
 end
@@ -68,12 +72,60 @@ local function ClearCaches()
 	SuffixCountCache = {}
 end
 
-local function CountCustomWords()
+local function CountSet(t)
 	local c = 0
-	for _ in pairs(CustomWordSet) do
+	for _ in pairs(t) do
 		c += 1
 	end
 	return c
+end
+
+local function CountCustomWords()
+	return CountSet(CustomWordSet)
+end
+
+local function SaveWordSet(fileName, setTable)
+	local list = {}
+	for word in pairs(setTable) do
+		table.insert(list, word)
+	end
+	table.sort(list)
+	writefile(fileName, table.concat(list, "\n"))
+end
+
+local function LoadWordSet(fileName, setTable)
+	if not isfile(fileName) then
+		return
+	end
+
+	local content = readfile(fileName)
+	for word in content:gmatch("%S+") do
+		setTable[word:lower()] = true
+	end
+end
+
+local function MarkWordTyped(word)
+	word = tostring(word or ""):lower()
+	if word == "" then
+		return
+	end
+	if not TypedWordSet[word] then
+		TypedWordSet[word] = true
+		SaveWordSet(TYPED_WORDS_FILE, TypedWordSet)
+		ClearCaches()
+	end
+end
+
+local function HideWord(word)
+	word = tostring(word or ""):lower()
+	if word == "" then
+		return
+	end
+	if not HiddenWordSet[word] then
+		HiddenWordSet[word] = true
+		SaveWordSet(HIDDEN_WORDS_FILE, HiddenWordSet)
+		ClearCaches()
+	end
 end
 
 local function AddWordToBuckets(word, isCustom)
@@ -99,24 +151,12 @@ local function AddWordToBuckets(word, isCustom)
 		local s2 = word:sub(-2)
 		local s3 = word:sub(-3)
 
-		if #p1 == 1 then
-			AddToBucket(PrefixBuckets1, p1, word)
-		end
-		if #p2 == 2 then
-			AddToBucket(PrefixBuckets2, p2, word)
-		end
-		if #p3 == 3 then
-			AddToBucket(PrefixBuckets3, p3, word)
-		end
-		if #s1 == 1 then
-			AddToBucket(SuffixBuckets1, s1, word)
-		end
-		if #s2 == 2 then
-			AddToBucket(SuffixBuckets2, s2, word)
-		end
-		if #s3 == 3 then
-			AddToBucket(SuffixBuckets3, s3, word)
-		end
+		if #p1 == 1 then AddToBucket(PrefixBuckets1, p1, word) end
+		if #p2 == 2 then AddToBucket(PrefixBuckets2, p2, word) end
+		if #p3 == 3 then AddToBucket(PrefixBuckets3, p3, word) end
+		if #s1 == 1 then AddToBucket(SuffixBuckets1, s1, word) end
+		if #s2 == 2 then AddToBucket(SuffixBuckets2, s2, word) end
+		if #s3 == 3 then AddToBucket(SuffixBuckets3, s3, word) end
 	end
 
 	if isCustom then
@@ -188,54 +228,21 @@ local function LoadDictionaries()
 end
 
 local function LoadCustomWords()
-	if not isfile(CUSTOM_WORDS_FILE) then
-		return
+	if isfile(CUSTOM_WORDS_FILE) then
+		local content = readfile(CUSTOM_WORDS_FILE)
+		for word in content:gmatch("%S+") do
+			AddWordToBuckets(word, true)
+		end
 	end
 
-	local content = readfile(CUSTOM_WORDS_FILE)
-	for word in content:gmatch("%S+") do
-		AddWordToBuckets(word, true)
-	end
-
+	LoadWordSet(TYPED_WORDS_FILE, TypedWordSet)
+	LoadWordSet(HIDDEN_WORDS_FILE, HiddenWordSet)
 	ClearCaches()
 	print("Loaded custom words: " .. tostring(CountCustomWords()))
 end
 
-local function SaveCustomWords()
-	local list = {}
-	for word in pairs(CustomWordSet) do
-		table.insert(list, word)
-	end
-	table.sort(list)
-	writefile(CUSTOM_WORDS_FILE, table.concat(list, "\n"))
-end
-
 LoadDictionaries()
 LoadCustomWords()
-
-do
-	local saved = false
-
-	local function SaveOnce()
-		if saved then
-			return
-		end
-		saved = true
-		pcall(SaveCustomWords)
-	end
-
-	player.AncestryChanged:Connect(function(_, parent)
-		if parent == nil then
-			SaveOnce()
-		end
-	end)
-
-	pcall(function()
-		game:BindToClose(function()
-			SaveOnce()
-		end)
-	end)
-end
 
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "LastLetterOptimizedFullGUI"
@@ -542,7 +549,7 @@ local function GetSuggestions(prefix)
 	local custom = {}
 
 	for _, word in ipairs(GetPrefixCandidates(prefix)) do
-		if word:sub(1, #prefix) == prefix and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
+		if not HiddenWordSet[word] and word:sub(1, #prefix) == prefix and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
 			if CustomWordSet[word] then
 				table.insert(custom, word)
 			else
@@ -644,7 +651,7 @@ local function SearchWords(query, mode)
 
 	if mode == "word" then
 		for _, word in ipairs(Words) do
-			if word:find(query, 1, true) and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
+			if not HiddenWordSet[word] and word:find(query, 1, true) and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
 				if CustomWordSet[word] then
 					table.insert(custom, word)
 				else
@@ -654,7 +661,7 @@ local function SearchWords(query, mode)
 		end
 	elseif mode == "prefix" then
 		for _, word in ipairs(GetPrefixCandidates(query)) do
-			if word:sub(1, #query) == query and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
+			if not HiddenWordSet[word] and word:sub(1, #query) == query and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
 				if CustomWordSet[word] then
 					table.insert(custom, word)
 				else
@@ -664,7 +671,7 @@ local function SearchWords(query, mode)
 		end
 	elseif mode == "suffix" then
 		for _, word in ipairs(GetSuffixCandidates(query)) do
-			if word:sub(-#query) == query and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
+			if not HiddenWordSet[word] and word:sub(-#query) == query and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
 				if CustomWordSet[word] then
 					table.insert(custom, word)
 				else
@@ -722,17 +729,14 @@ local function GetActivePageCount()
 	end
 
 	local totalPages = 1
-
 	if suggesterEnabled then
 		local data = GetSuggestions(prefix)
 		totalPages = math.max(totalPages, GetPageCount(data.normal, data.custom, pageSize))
 	end
-
 	if trapModeEnabled then
 		local data = FindTraps(prefix)
 		totalPages = math.max(totalPages, GetPageCount(data.normal, data.custom, pageSize))
 	end
-
 	return totalPages
 end
 
@@ -794,6 +798,8 @@ local function PressKey(vk)
 		local keyCode
 		if vk == 0x10 then
 			keyCode = Enum.KeyCode.LeftShift
+		elseif vk == 0x0D then
+			keyCode = Enum.KeyCode.Return
 		else
 			keyCode = Enum.KeyCode[string.char(vk)]
 		end
@@ -814,6 +820,8 @@ local function ReleaseKey(vk)
 		local keyCode
 		if vk == 0x10 then
 			keyCode = Enum.KeyCode.LeftShift
+		elseif vk == 0x0D then
+			keyCode = Enum.KeyCode.Return
 		else
 			keyCode = Enum.KeyCode[string.char(vk)]
 		end
@@ -823,51 +831,62 @@ local function ReleaseKey(vk)
 	end
 end
 
-local function StripCurrentPrefix(word)
+local function StripCurrentPrefix(word, prefix)
 	word = tostring(word or "")
-	local prefix = GetCurrentPrefix()
+	prefix = tostring(prefix or ""):lower()
 	if prefix ~= "" and word:sub(1, #prefix):lower() == prefix then
 		return word:sub(#prefix + 1)
 	end
 	return word
 end
 
-local function TypeWordHumanized(word)
+local function TypeWordHumanized(word, prefix)
 	if typingLock then
 		return
 	end
 
 	typingLock = true
 	task.spawn(function()
-		FocusAwayFromSearch()
+		local ok, err = pcall(function()
+			FocusAwayFromSearch()
+			task.wait(0.03)
 
-		word = StripCurrentPrefix(word)
-		word = tostring(word or "")
+			word = StripCurrentPrefix(word, prefix)
+			word = tostring(word or "")
 
-		if #word == 0 then
-			typingLock = false
-			return
-		end
-
-		word = word:lower()
-
-		for i = 1, #word do
-			local char = word:sub(i, i)
-			if char:match("%a") then
-				local vk = string.byte(char:upper())
-				PressKey(vk)
-				task.wait(math.random(12, 30) / 1000)
-				ReleaseKey(vk)
+			if #word == 0 then
+				return
 			end
 
-			local delay = math.random() * (maxDelay - minDelay) + minDelay
-			if math.random() < 0.18 then
-				delay = delay + math.random(4, 12) / 100
+			word = word:lower()
+
+			for i = 1, #word do
+				local char = word:sub(i, i)
+				if char:match("%a") then
+					local vk = string.byte(char:upper())
+					PressKey(vk)
+					task.wait(math.random(12, 30) / 1000)
+					ReleaseKey(vk)
+				end
+
+				local delay = math.random() * (maxDelay - minDelay) + minDelay
+				if math.random() < 0.18 then
+					delay = delay + math.random(4, 12) / 100
+				end
+				if math.random() < 0.07 then
+					delay = delay + math.random(12, 26) / 100
+				end
+				task.wait(delay)
 			end
-			if math.random() < 0.07 then
-				delay = delay + math.random(12, 26) / 100
-			end
-			task.wait(delay)
+
+			task.wait(math.random(1, 16) / 100)
+			PressKey(0x0D)
+			task.wait(math.random(1, 4) / 1000)
+			ReleaseKey(0x0D)
+		end)
+
+		if not ok then
+			warn(err)
 		end
 
 		typingLock = false
@@ -877,7 +896,7 @@ end
 local function MakeWordButton(parent, text, value)
 	local btn = Instance.new("TextButton")
 	btn.Size = UDim2.new(0.32, -2, 0, 28)
-	btn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+	btn.BackgroundColor3 = HiddenWordSet[value] and Color3.fromRGB(80, 80, 80) or (TypedWordSet[value] and Color3.fromRGB(0, 170, 80) or Color3.fromRGB(45, 45, 55))
 	btn.BorderSizePixel = 0
 	btn.Text = text
 	btn.TextColor3 = Color3.new(1, 1, 1)
@@ -891,19 +910,20 @@ local function MakeWordButton(parent, text, value)
 	corner.Parent = btn
 
 	btn.MouseButton1Click:Connect(function()
-		if not value or value == "" then
+		if HiddenWordSet[value] then
 			return
 		end
 
-		if autoTypeEnabled then
-			task.spawn(function()
-				local stripped = StripCurrentPrefix(value)
-				if stripped ~= "" then
-					TypeWordHumanized(stripped)
-				else
-					searchBox.Text = value or ""
-				end
-			end)
+		if TypedWordSet[value] then
+			HideWord(value)
+			MarkDirty()
+			return
+		end
+
+		if autoTypeEnabled and value and value ~= "" then
+			MarkWordTyped(value)
+			TypeWordHumanized(value, GetCurrentPrefix())
+			MarkDirty()
 		else
 			searchBox.Text = value or ""
 		end
@@ -952,8 +972,8 @@ local function BuildSectionItems(title, entries, emptyText)
 end
 
 settingsFrame = Instance.new("Frame")
-settingsFrame.Size = UDim2.new(0, 350, 0, 420)
-settingsFrame.Position = UDim2.new(0.5, -175, 0.5, -210)
+settingsFrame.Size = UDim2.new(0, 350, 0, 430)
+settingsFrame.Position = UDim2.new(0.5, -175, 0.5, -215)
 settingsFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
 settingsFrame.BorderSizePixel = 0
 settingsFrame.Visible = false
@@ -1193,12 +1213,19 @@ addCustomBtn.MouseButton1Click:Connect(function()
 	ResetPagination()
 
 	if addedAny then
-		pcall(SaveCustomWords)
+		pcall(function()
+			SaveWordSet(CUSTOM_WORDS_FILE, CustomWordSet)
+		end)
 	end
 
 	MarkDirty()
 	print("Custom words updated: " .. tostring(CountCustomWords()))
 end)
+
+local spacer = Instance.new("Frame")
+spacer.Size = UDim2.new(1, 0, 0, 8)
+spacer.BackgroundTransparency = 1
+spacer.Parent = settingsScroll
 
 local autoTypeBtn = Instance.new("TextButton")
 autoTypeBtn.Size = UDim2.new(1, 0, 0, 30)
