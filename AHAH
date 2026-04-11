@@ -882,7 +882,6 @@ local function TypeWordHumanized(word)
 			local startIndex = 1
 			if prefix ~= "" then
 				local maxLen = math.min(#prefix, #fullWord)
-
 				for i = 1, maxLen do
 					if prefix:sub(i,i) ~= fullWord:sub(i,i) then
 						break
@@ -894,6 +893,34 @@ local function TypeWordHumanized(word)
 			local remaining = fullWord:sub(startIndex)
 			if #remaining == 0 then return end
 
+			local function GetHumanDelay(i, total)
+				local base = math.random() * (maxDelay - minDelay) + minDelay
+				local delay = base
+
+				local isSpeedTypist = (minDelay >= 0.05 and maxDelay <= 0.09)
+
+				if isSpeedTypist then
+					delay = delay + (math.random() - 0.5) * 0.015
+				else
+					if i / total < 0.2 then
+						delay = delay + 0.04
+					elseif i / total > 0.8 then
+						delay = delay + 0.03
+					end
+					delay = delay + (math.random() - 0.5) * 0.03
+				end
+
+				if math.random() < 0.08 then
+					delay = delay + math.random(12, 28) / 100
+				end
+
+				if math.random() < 0.15 then
+					delay = delay + math.random(5, 10) / 100
+				end
+
+				return math.clamp(delay, minDelay, maxDelay + 0.3)
+			end
+
 			for i = 1, #remaining do
 				local char = remaining:sub(i, i)
 
@@ -904,18 +931,18 @@ local function TypeWordHumanized(word)
 					end
 				end
 
-				task.wait(math.random() * (maxDelay - minDelay) + minDelay)
+				task.wait(GetHumanDelay(i, #remaining))
 			end
 
-			task.wait(math.random() * (maxDelay - minDelay) + minDelay)
+			task.wait(GetHumanDelay(#remaining, #remaining) + math.random(5,15)/100)
 
 			PressVk(13)
-			task.wait(0.02)
+			task.wait(0.03)
 			ReleaseVk(13)
 
 			pcall(function()
 				game:GetService("VirtualInputManager"):SendKeyEvent(true, Enum.KeyCode.Return, false, game)
-				task.wait(0.02)
+				task.wait(0.03)
 				game:GetService("VirtualInputManager"):SendKeyEvent(false, Enum.KeyCode.Return, false, game)
 			end)
 		end)
