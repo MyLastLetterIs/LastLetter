@@ -27,28 +27,44 @@ local dictionaries = {
 
 local WORDS_FILE = "lastletter_full_dict_v3.txt"
 local CUSTOM_WORDS_FILE = "lastletter_custom_words.txt"
+local BLACKLIST_FILE = "lastletter_blacklisted_words.txt"
 
 local Words, WordSet, CustomWordSet = {}, {}, {}
 local PrefixBuckets1, PrefixBuckets2, PrefixBuckets3 = {}, {}, {}
 local SuffixBuckets1, SuffixBuckets2, SuffixBuckets3 = {}, {}, {}
 local SuggestionCache, TrapCache, SearchCache, SuffixCountCache = {}, {}, {}, {}
-local Blacklist, UsedWords = {}, {}
 
-local AutoPlayEnabled, AutoTypeEnabled = false, false
-local typingLock, isTyping = false, false
-local minLength, maxLength = 3, 20
-local searchMode, lengthPriority = "word", "normal"
-local uiDirty, currentPage, pageSize = true, 1, 9
-local lastSearchActive, forceUpdateList = false, false
-local minDelay, maxDelay = 0.08, 0.1
-local suggesterEnabled, trapModeEnabled = false, false
-local lastDetected, isMyTurnLogDetected = "---", false
-local lastAutoChosen, lastAutoPrefix = "", ""
+local PersistentBlacklist = {}
+local RuntimeBlacklist = {}
+local UsedWords = {}
 
-local ManualTrap2, ManualTrap3 = {}, {}
+local AutoPlayEnabled = false
+local AutoTypeEnabled = false
+local typingLock = false
+local isTyping = false
+local minLength = 3
+local maxLength = 20
+local searchMode = "word"
+local lengthPriority = "normal"
+local uiDirty = true
+local currentPage = 1
+local pageSize = 9
+local lastSearchActive = false
+local minDelay = 0.08
+local maxDelay = 0.1
+local suggesterEnabled = false
+local trapModeEnabled = false
+local lastDetected = "---"
+local isMyTurnLogDetected = false
+local lastAutoChosen = ""
+local lastAutoPrefix = ""
+
+local ManualTrap2 = {}
 for _, v in ipairs({"bs","ez","ff","ft","hm","hs","ht","ie","ii","ks","ld","lm","ls","lt","nd","nn","ns","rf","rl","rm","rp","rs","rt","ue","vy","yl"}) do
 	ManualTrap2[v] = true
 end
+
+local ManualTrap3 = {}
 for _, v in ipairs({"amh","anz","iga","keh","kup","rua"}) do
 	ManualTrap3[v] = true
 end
@@ -66,11 +82,14 @@ local function AddToBucket(bucket, key, word)
 end
 
 local function ClearCaches()
-	SuggestionCache, TrapCache, SearchCache, SuffixCountCache = {}, {}, {}, {}
+	SuggestionCache = {}
+	TrapCache = {}
+	SearchCache = {}
+	SuffixCountCache = {}
 end
 
 local function IsBlacklisted(word)
-	return Blacklist[word] == true
+	return PersistentBlacklist[word] == true or RuntimeBlacklist[word] == true
 end
 
 local function AddWordToBuckets(word, isCustom)
@@ -82,9 +101,9 @@ local function AddWordToBuckets(word, isCustom)
 	if not WordSet[word] then
 		WordSet[word] = true
 		Words[#Words + 1] = word
-		AddToBucket(PrefixBuckets1, word:sub(1,1), word)
-		AddToBucket(PrefixBuckets2, word:sub(1,2), word)
-		AddToBucket(PrefixBuckets3, word:sub(1,3), word)
+		AddToBucket(PrefixBuckets1, word:sub(1, 1), word)
+		AddToBucket(PrefixBuckets2, word:sub(1, 2), word)
+		AddToBucket(PrefixBuckets3, word:sub(1, 3), word)
 		AddToBucket(SuffixBuckets1, word:sub(-1), word)
 		AddToBucket(SuffixBuckets2, word:sub(-2), word)
 		AddToBucket(SuffixBuckets3, word:sub(-3), word)
@@ -157,23 +176,47 @@ local function SaveCustomWords()
 	writefile(CUSTOM_WORDS_FILE, table.concat(list, "\n"))
 end
 
-local function ClearMistakes()
-	for w in pairs(Blacklist) do
-		Blacklist[w] = nil
+local function LoadBlacklistedWords()
+	if not isfile(BLACKLIST_FILE) then
+		return
 	end
+	for w in readfile(BLACKLIST_FILE):gmatch("%S+") do
+		w = tostring(w):lower():gsub("%s+", "")
+		if w ~= "" then
+			PersistentBlacklist[w] = true
+		end
+	end
+end
+
+local function SaveBlacklistedWords()
+	local list = {}
+	for w in pairs(PersistentBlacklist) do
+		list[#list + 1] = w
+	end
+	table.sort(list)
+	writefile(BLACKLIST_FILE, table.concat(list, "\n"))
+end
+
+local function ClearMistakes()
+	table.clear(RuntimeBlacklist)
+	table.clear(UsedWords)
+	lastAutoChosen = ""
+	lastAutoPrefix = ""
+	uiDirty = true
 	ClearCaches()
 end
 
 local function BlacklistWord(word)
 	word = tostring(word or ""):lower():gsub("%s+", "")
 	if word ~= "" then
-		Blacklist[word] = true
+		PersistentBlacklist[word] = true
 		ClearCaches()
 	end
 end
 
 LoadDictionaries()
 LoadCustomWords()
+LoadBlacklistedWords()
 
 do
 	local saved = false
@@ -183,12 +226,15 @@ do
 		end
 		saved = true
 		pcall(SaveCustomWords)
+		pcall(SaveBlacklistedWords)
 	end
+
 	player.AncestryChanged:Connect(function(_, parent)
 		if parent == nil then
 			SaveOnce()
 		end
 	end)
+
 	pcall(function()
 		game:BindToClose(function()
 			SaveOnce()
@@ -359,9 +405,7 @@ local function GetCurrentPrefix()
 			end
 		end
 	end
-	table.sort(letters, function(a, b)
-		return a.p < b.p
-	end)
+	table.sort(letters, function(a, b) return a.p < b.p end)
 	local prefix = ""
 	for _, letter in ipairs(letters) do
 		prefix ..= letter.t
@@ -385,7 +429,9 @@ end
 
 local function IsAutoPlayTurn()
 	local typeLabel = GetTypeLabel()
-	if not typeLabel then return false end
+	if not typeLabel then
+		return false
+	end
 	local text = tostring(typeLabel.Text or "")
 	return text ~= "" and string.find(string.lower(text), string.lower(player.Name), 1, true) ~= nil
 end
@@ -467,7 +513,9 @@ end
 
 local function GetSuggestions(prefix)
 	local key = prefix .. "|" .. lengthPriority .. "|" .. tostring(minLength) .. "|" .. tostring(maxLength)
-	if SuggestionCache[key] then return SuggestionCache[key] end
+	if SuggestionCache[key] then
+		return SuggestionCache[key]
+	end
 
 	local normal, custom = {}, {}
 	for _, word in ipairs(GetPrefixCandidates(prefix)) do
@@ -498,19 +546,25 @@ local function GetCustomFallback(prefix)
 end
 
 local function GetSuffixCount(suffix)
-	if SuffixCountCache[suffix] ~= nil then return SuffixCountCache[suffix] end
+	if SuffixCountCache[suffix] ~= nil then
+		return SuffixCountCache[suffix]
+	end
+
 	local count = 0
 	for _, word in ipairs(GetPrefixCandidates(suffix)) do
 		if not IsBlacklisted(word) and word:sub(1, #suffix) == suffix then
 			count += 1
 		end
 	end
+
 	SuffixCountCache[suffix] = count
 	return count
 end
 
 local function FindTraps(prefix)
-	if TrapCache[prefix] then return TrapCache[prefix] end
+	if TrapCache[prefix] then
+		return TrapCache[prefix]
+	end
 
 	local normal, custom, checkedSuffix = {}, {}, {}
 	for _, word in ipairs(GetPrefixCandidates(prefix)) do
@@ -675,33 +729,71 @@ end
 local function blacklistAndRemoveFromCaches(word)
 	word = tostring(word or ""):lower():gsub("%s+", "")
 	if word ~= "" then
-		Blacklist[word] = true
+		RuntimeBlacklist[word] = true
 		ClearCaches()
 	end
 end
 
-local function PickAutoPlayWord(prefix)
-	local data = GetSuggestions(prefix)
-	local combined = {}
-	for _, word in ipairs(data.normal) do
-		if not IsBlacklisted(word) and not UsedWords[word] then
-			combined[#combined + 1] = word
-		end
-	end
-	for _, word in ipairs(data.custom) do
-		if not IsBlacklisted(word) and not UsedWords[word] then
-			combined[#combined + 1] = word
-		end
-	end
-	if #combined == 0 then
-		local fallback = GetCustomFallback(prefix)
-		for _, word in ipairs(fallback) do
+local function BuildAutoPlayPool(prefix)
+	local pool = {}
+	local searchQuery = searchBox.Text:gsub("^%s+", ""):gsub("%s+$", ""):lower()
+
+	if searchQuery ~= "" then
+		local data = SearchWords(searchQuery, searchMode)
+		for _, word in ipairs(data.normal) do
 			if not IsBlacklisted(word) and not UsedWords[word] then
-				combined[#combined + 1] = word
+				pool[#pool + 1] = word
+			end
+		end
+		for _, word in ipairs(data.custom) do
+			if not IsBlacklisted(word) and not UsedWords[word] then
+				pool[#pool + 1] = word
 			end
 		end
 	end
-	return combined[1]
+
+	if #pool == 0 and suggesterEnabled then
+		local data = GetSuggestions(prefix)
+		for _, word in ipairs(data.normal) do
+			if not IsBlacklisted(word) and not UsedWords[word] then
+				pool[#pool + 1] = word
+			end
+		end
+		for _, word in ipairs(data.custom) do
+			if not IsBlacklisted(word) and not UsedWords[word] then
+				pool[#pool + 1] = word
+			end
+		end
+	end
+
+	if #pool == 0 then
+		local data = GetSuggestions(prefix)
+		for _, word in ipairs(data.normal) do
+			if not IsBlacklisted(word) and not UsedWords[word] then
+				pool[#pool + 1] = word
+			end
+		end
+		for _, word in ipairs(data.custom) do
+			if not IsBlacklisted(word) and not UsedWords[word] then
+				pool[#pool + 1] = word
+			end
+		end
+	end
+
+	if #pool == 0 then
+		for _, word in ipairs(GetCustomFallback(prefix)) do
+			if not IsBlacklisted(word) and not UsedWords[word] then
+				pool[#pool + 1] = word
+			end
+		end
+	end
+
+	return pool
+end
+
+local function PickAutoPlayWord(prefix)
+	local pool = BuildAutoPlayPool(prefix)
+	return pool[1]
 end
 
 local function verifyWord(targetWord, currentDetected, verifyStart)
@@ -737,7 +829,6 @@ local function handleRejectedWord(targetWord)
 	rejectReactionDelay()
 	lastDetected = "---"
 	isTyping = false
-	forceUpdateList = true
 	typingLock = false
 	lastAutoChosen = ""
 end
@@ -765,6 +856,7 @@ local function TypeWordAutoPlay(word)
 		typingLock, isTyping = true, true
 		local ok, err = pcall(function()
 			reactionDelay()
+
 			local fullWord = tostring(word or ""):lower()
 			if #fullWord == 0 then
 				typingLock, isTyping = false, false
@@ -948,8 +1040,8 @@ local function BuildSectionItems(title, entries, emptyText)
 end
 
 settingsFrame = Instance.new("Frame")
-settingsFrame.Size = UDim2.new(0, 290, 0, 356)
-settingsFrame.Position = UDim2.new(0.5, -145, 0.5, -178)
+settingsFrame.Size = UDim2.new(0, 290, 0, 404)
+settingsFrame.Position = UDim2.new(0.5, -145, 0.5, -202)
 settingsFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
 settingsFrame.BorderSizePixel = 0
 settingsFrame.Visible = false
@@ -1150,6 +1242,54 @@ addCustomBtn.MouseButton1Click:Connect(function()
 	if addedAny then
 		pcall(SaveCustomWords)
 	end
+	uiDirty = true
+end)
+
+local blacklistBlock = Instance.new("Frame")
+blacklistBlock.Size = UDim2.new(1, 0, 0, 68)
+blacklistBlock.BackgroundTransparency = 1
+blacklistBlock.Parent = settingsScroll
+
+local blacklistLabel = Instance.new("TextLabel")
+blacklistLabel.Size = UDim2.new(1, 0, 0, 16)
+blacklistLabel.BackgroundTransparency = 1
+blacklistLabel.Text = "Blacklist Word"
+blacklistLabel.TextColor3 = Color3.new(1, 1, 1)
+blacklistLabel.Font = Enum.Font.Gotham
+blacklistLabel.TextSize = 13
+blacklistLabel.TextXAlignment = Enum.TextXAlignment.Left
+blacklistLabel.Parent = blacklistBlock
+
+local blacklistBox = Instance.new("TextBox")
+blacklistBox.Size = UDim2.new(0.7, 0, 0, 28)
+blacklistBox.Position = UDim2.new(0, 0, 0, 20)
+blacklistBox.PlaceholderText = "word to blacklist"
+blacklistBox.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+blacklistBox.BorderSizePixel = 0
+blacklistBox.TextColor3 = Color3.new(1, 1, 1)
+blacklistBox.Font = Enum.Font.Gotham
+blacklistBox.TextSize = 13
+blacklistBox.ClearTextOnFocus = false
+blacklistBox.Parent = blacklistBlock
+round(blacklistBox, 6)
+
+local blacklistBtn = Instance.new("TextButton")
+blacklistBtn.Size = UDim2.new(0.28, 0, 0, 28)
+blacklistBtn.Position = UDim2.new(0.72, 0, 0, 20)
+blacklistBtn.Text = "Set"
+blacklistBtn.BackgroundColor3 = Color3.fromRGB(220, 60, 60)
+blacklistBtn.BorderSizePixel = 0
+blacklistBtn.TextColor3 = Color3.new(1, 1, 1)
+blacklistBtn.Font = Enum.Font.GothamSemibold
+blacklistBtn.TextSize = 13
+blacklistBtn.Parent = blacklistBlock
+round(blacklistBtn, 6)
+
+blacklistBtn.MouseButton1Click:Connect(function()
+	local word = blacklistBox.Text
+	BlacklistWord(word)
+	blacklistBox.Text = ""
+	pcall(SaveBlacklistedWords)
 	uiDirty = true
 end)
 
@@ -1438,8 +1578,12 @@ local function RenderSearch(query)
 	MakeHeader("Search (" .. searchMode:upper() .. "): " .. query .. " | Page " .. currentPage .. "/" .. totalPages)
 
 	local customEntries, normalEntries = {}, {}
-	for _, word in ipairs(pageCustom) do customEntries[#customEntries + 1] = { display = word, value = word } end
-	for _, word in ipairs(pageNormal) do normalEntries[#normalEntries + 1] = { display = word, value = word } end
+	for _, word in ipairs(pageCustom) do
+		customEntries[#customEntries + 1] = { display = word, value = word }
+	end
+	for _, word in ipairs(pageNormal) do
+		normalEntries[#normalEntries + 1] = { display = word, value = word }
+	end
 
 	if #customEntries > 0 then
 		BuildSectionItems("Custom Words:", customEntries, "")
