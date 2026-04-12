@@ -89,6 +89,7 @@ local function ClearCaches()
 end
 
 local function IsBlacklisted(word)
+	word = tostring(word or ""):lower():gsub("%s+", "")
 	return PersistentBlacklist[word] == true or RuntimeBlacklist[word] == true
 end
 
@@ -478,7 +479,9 @@ local function SlicePage(items, page, size)
 	local startIndex = ((page - 1) * size) + 1
 	local endIndex = math.min(#items, startIndex + size - 1)
 	local result = {}
-	if startIndex > #items then return result end
+	if startIndex > #items then
+		return result
+	end
 	for i = startIndex, endIndex do
 		result[#result + 1] = items[i]
 	end
@@ -853,13 +856,16 @@ local function TypeWordAutoPlay(word)
 	end
 
 	task.spawn(function()
-		typingLock, isTyping = true, true
+		typingLock = true
+		isTyping = true
+
 		local ok, err = pcall(function()
 			reactionDelay()
 
 			local fullWord = tostring(word or ""):lower()
 			if #fullWord == 0 then
-				typingLock, isTyping = false, false
+				typingLock = false
+				isTyping = false
 				return
 			end
 
@@ -879,7 +885,8 @@ local function TypeWordAutoPlay(word)
 			if #remaining == 0 then
 				reactionDelay()
 				PressEnter()
-				typingLock, isTyping = false, false
+				typingLock = false
+				isTyping = false
 				return
 			end
 
@@ -927,10 +934,13 @@ local function TypeWordAutoPlay(word)
 				handleAcceptedWord(fullWord)
 			end
 		end)
+
 		if not ok then
 			warn(err)
 		end
-		typingLock, isTyping = false, false
+
+		typingLock = false
+		isTyping = false
 	end)
 end
 
