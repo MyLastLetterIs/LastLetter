@@ -60,12 +60,12 @@ local lastAutoChosen = ""
 local lastAutoPrefix = ""
 
 local ManualTrap2 = {}
-for _, v in ipairs({"bs","ez","ff","ft","hm","hs","ht","ie","ii","ks","ld","lm","ls","lt","nd","nn","ns","rf","rl","rm","rp","rs","rt","ue","vy","yl"}) do
+for _, v in ipairs({"dh","ez","dz","yp","yc","pf","xo","yc","hd","mb","ld","sf","ls","lt","nd","nn","ns","rf","rl","rm","rp","rs","rt","yg","vy","yp"}) do
 	ManualTrap2[v] = true
 end
 
 local ManualTrap3 = {}
-for _, v in ipairs({"amh","anz","iga","keh","kup","rua"}) do
+for _, v in ipairs({"ehr","tch","ivy","exs","ork","umi","dha","dhu","nga","laf",}) do
 	ManualTrap3[v] = true
 end
 
