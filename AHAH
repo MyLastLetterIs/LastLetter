@@ -9,237 +9,191 @@ local playerGui = player:WaitForChild("PlayerGui")
 
 local existingGui = playerGui:FindFirstChild("LastLetterOptimizedFullGUI")
 if existingGui then
-existingGui:Destroy()
+	existingGui:Destroy()
 end
 
 local dictionaries = {
-"https://raw.githubusercontent.com/dwyl/english-words/master/words_alpha.txt",
-"https://raw.githubusercontent.com/dwyl/english-words/master/words.txt",
-"https://raw.githubusercontent.com/nlile/dictionary-word-list/master/largest_possible_aspell_wordlist_without_diacritic.txt",
-"https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/en/en_50k.txt",
-"https://raw.githubusercontent.com/tabatkins/wordle-list/main/words",
-"https://raw.githubusercontent.com/first20hours/google-10000-english/master/20k.txt",
-"https://raw.githubusercontent.com/first20hours/google-10000-english/master/google-10000-english-no-swears.txt",
-"https://raw.githubusercontent.com/dolph/dictionary/master/enable1.txt",
-"https://raw.githubusercontent.com/pbevin/lexicon/master/lexicon.txt",
-"https://raw.githubusercontent.com/MyLastLetterIs/longwords/refs/heads/main/extremely-long-words"
+	"https://raw.githubusercontent.com/dwyl/english-words/master/words_alpha.txt",
+	"https://raw.githubusercontent.com/dwyl/english-words/master/words.txt",
+	"https://raw.githubusercontent.com/nlile/dictionary-word-list/master/largest_possible_aspell_wordlist_without_diacritic.txt",
+	"https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/en/en_50k.txt",
+	"https://raw.githubusercontent.com/tabatkins/wordle-list/main/words",
+	"https://raw.githubusercontent.com/first20hours/google-10000-english/master/20k.txt",
+	"https://raw.githubusercontent.com/first20hours/google-10000-english/master/google-10000-english-no-swears.txt",
+	"https://raw.githubusercontent.com/dolph/dictionary/master/enable1.txt",
+	"https://raw.githubusercontent.com/pbevin/lexicon/master/lexicon.txt",
+	"https://raw.githubusercontent.com/MyLastLetterIs/longwords/refs/heads/main/extremely-long-words"
 }
 
 local WORDS_FILE = "lastletter_full_dict_v3.txt"
 local CUSTOM_WORDS_FILE = "lastletter_custom_words.txt"
 
-local Words = {}
-local WordSet = {}
-local CustomWordSet = {}
-local PrefixBuckets1 = {}
-local PrefixBuckets2 = {}
-local PrefixBuckets3 = {}
-local SuffixBuckets1 = {}
-local SuffixBuckets2 = {}
-local SuffixBuckets3 = {}
-local SuggestionCache = {}
-local TrapCache = {}
-local SearchCache = {}
-local SuffixCountCache = {}
+local Words, WordSet, CustomWordSet = {}, {}, {}
+local PrefixBuckets1, PrefixBuckets2, PrefixBuckets3 = {}, {}, {}
+local SuffixBuckets1, SuffixBuckets2, SuffixBuckets3 = {}, {}, {}
+local SuggestionCache, TrapCache, SearchCache, SuffixCountCache = {}, {}, {}, {}
+local Blacklist, UsedWords = {}, {}
 
-local ManualTrap2 = {}
-for _, v in ipairs({
-"bs", "ez", "ff", "ft", "hm", "hs", "ht", "ie", "ii", "ks", "ld", "lm", "ls", "lt", "nd", "nn", "ns", "rf", "rl", "rm", "rp", "rs", "rt", "ue", "vy", "yl"
-}) do
-ManualTrap2[v] = true
+local AutoPlayEnabled, AutoTypeEnabled = false, false
+local typingLock, isTyping = false, false
+local minLength, maxLength = 3, 20
+local searchMode, lengthPriority = "word", "normal"
+local uiDirty, currentPage, pageSize = true, 1, 9
+local lastSearchActive, forceUpdateList = false, false
+local minDelay, maxDelay = 0.08, 0.1
+local suggesterEnabled, trapModeEnabled = false, false
+local lastDetected, isMyTurnLogDetected = "---", false
+local lastAutoChosen, lastAutoPrefix = "", ""
+
+local ManualTrap2, ManualTrap3 = {}, {}
+for _, v in ipairs({"bs","ez","ff","ft","hm","hs","ht","ie","ii","ks","ld","lm","ls","lt","nd","nn","ns","rf","rl","rm","rp","rs","rt","ue","vy","yl"}) do
+	ManualTrap2[v] = true
+end
+for _, v in ipairs({"amh","anz","iga","keh","kup","rua"}) do
+	ManualTrap3[v] = true
 end
 
-local ManualTrap3 = {}
-for _, v in ipairs({
-"amh", "anz", "iga", "keh", "kup", "rua"
-}) do
-ManualTrap3[v] = true
+local function round(obj, n)
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, n or 6)
+	c.Parent = obj
+	return c
 end
 
 local function AddToBucket(bucket, key, word)
-bucket[key] = bucket[key] or {}
-table.insert(bucket[key], word)
+	bucket[key] = bucket[key] or {}
+	bucket[key][#bucket[key] + 1] = word
 end
 
 local function ClearCaches()
-SuggestionCache = {}
-TrapCache = {}
-SearchCache = {}
-SuffixCountCache = {}
+	SuggestionCache, TrapCache, SearchCache, SuffixCountCache = {}, {}, {}, {}
 end
 
-local function CountCustomWords()
-local c = 0
-for _ in pairs(CustomWordSet) do
-c += 1
-end
-return c
+local function IsBlacklisted(word)
+	return Blacklist[word] == true
 end
 
 local function AddWordToBuckets(word, isCustom)
-word = tostring(word or ""):lower():gsub("%s+", "")
-if not word:match("^[a-z]+$") then
-return false
-end
-if #word < 3 then
-return false
-end
+	word = tostring(word or ""):lower():gsub("%s+", "")
+	if not word:match("^[a-z]+$") or #word < 3 then
+		return false
+	end
 
-local inserted = false  
+	if not WordSet[word] then
+		WordSet[word] = true
+		Words[#Words + 1] = word
+		AddToBucket(PrefixBuckets1, word:sub(1,1), word)
+		AddToBucket(PrefixBuckets2, word:sub(1,2), word)
+		AddToBucket(PrefixBuckets3, word:sub(1,3), word)
+		AddToBucket(SuffixBuckets1, word:sub(-1), word)
+		AddToBucket(SuffixBuckets2, word:sub(-2), word)
+		AddToBucket(SuffixBuckets3, word:sub(-3), word)
+	end
 
-if not WordSet[word] then  
-	WordSet[word] = true  
-	table.insert(Words, word)  
-	inserted = true  
+	if isCustom then
+		CustomWordSet[word] = true
+	end
 
-	local p1 = word:sub(1, 1)  
-	local p2 = word:sub(1, 2)  
-	local p3 = word:sub(1, 3)  
-	local s1 = word:sub(-1)  
-	local s2 = word:sub(-2)  
-	local s3 = word:sub(-3)  
-
-	if #p1 == 1 then  
-		AddToBucket(PrefixBuckets1, p1, word)  
-	end  
-	if #p2 == 2 then  
-		AddToBucket(PrefixBuckets2, p2, word)  
-	end  
-	if #p3 == 3 then  
-		AddToBucket(PrefixBuckets3, p3, word)  
-	end  
-	if #s1 == 1 then  
-		AddToBucket(SuffixBuckets1, s1, word)  
-	end  
-	if #s2 == 2 then  
-		AddToBucket(SuffixBuckets2, s2, word)  
-	end  
-	if #s3 == 3 then  
-		AddToBucket(SuffixBuckets3, s3, word)  
-	end  
-end  
-
-if isCustom then  
-	CustomWordSet[word] = true  
-end  
-
-return inserted
-
+	return true
 end
 
 local function FetchUrl(url)
-local ok1, body1 = pcall(function()
-return game:HttpGet(url, true)
-end)
-if ok1 and type(body1) == "string" and #body1 > 0 then
-return body1
-end
-
-local ok2, resp = pcall(function()  
-	return HttpService:RequestAsync({  
-		Url = url,  
-		Method = "GET"  
-	})  
-end)  
-
-if ok2 and resp and resp.Success and type(resp.Body) == "string" and #resp.Body > 0 then  
-	return resp.Body  
-end  
-
-return nil
-
+	local ok, body = pcall(function()
+		return game:HttpGet(url, true)
+	end)
+	if ok and type(body) == "string" and #body > 0 then
+		return body
+	end
+	local ok2, resp = pcall(function()
+		return HttpService:RequestAsync({ Url = url, Method = "GET" })
+	end)
+	if ok2 and resp and resp.Success and type(resp.Body) == "string" and #resp.Body > 0 then
+		return resp.Body
+	end
+	return nil
 end
 
 local function LoadDictionaries()
-local loadedUnique = 0
+	if isfile(WORDS_FILE) then
+		for w in readfile(WORDS_FILE):gmatch("%S+") do
+			AddWordToBuckets(w, false)
+		end
+		return
+	end
 
-if isfile(WORDS_FILE) then  
-	local content = readfile(WORDS_FILE)  
-	for word in content:gmatch("%S+") do  
-		if AddWordToBuckets(word, false) then  
-			loadedUnique += 1  
-		end  
-	end  
-	print("Loaded " .. loadedUnique .. " unique words from cache")  
-	print("TOTAL UNIQUE WORDS: " .. #Words)  
-	return  
-end  
+	local all = ""
+	for _, url in ipairs(dictionaries) do
+		local body = FetchUrl(url)
+		if body and #body > 1000 then
+			all ..= "\n" .. body
+		end
+		task.wait(0.5)
+	end
 
-local allText = ""  
-for _, url in ipairs(dictionaries) do  
-	local body = FetchUrl(url)  
-	if body and #body > 1000 then  
-		allText = allText .. "\n" .. body  
-	else  
-		warn("Skipped or failed: " .. url)  
-	end  
-	task.wait(0.8)  
-end  
-
-if allText ~= "" then  
-	writefile(WORDS_FILE, allText)  
-	for word in allText:gmatch("%S+") do  
-		if AddWordToBuckets(word, false) then  
-			loadedUnique += 1  
-		end  
-	end  
-	print("Combined unique words: " .. loadedUnique)  
-end  
-
-print("TOTAL UNIQUE WORDS: " .. #Words)
-
+	if all ~= "" then
+		writefile(WORDS_FILE, all)
+		for w in all:gmatch("%S+") do
+			AddWordToBuckets(w, false)
+		end
+	end
 end
 
 local function LoadCustomWords()
-if not isfile(CUSTOM_WORDS_FILE) then
-return
-end
-
-local content = readfile(CUSTOM_WORDS_FILE)  
-for word in content:gmatch("%S+") do  
-	AddWordToBuckets(word, true)  
-end  
-
-ClearCaches()  
-print("Loaded custom words: " .. tostring(CountCustomWords()))
-
+	if not isfile(CUSTOM_WORDS_FILE) then
+		return
+	end
+	for w in readfile(CUSTOM_WORDS_FILE):gmatch("%S+") do
+		AddWordToBuckets(w, true)
+	end
+	ClearCaches()
 end
 
 local function SaveCustomWords()
-local list = {}
-for word in pairs(CustomWordSet) do
-table.insert(list, word)
+	local list = {}
+	for w in pairs(CustomWordSet) do
+		list[#list + 1] = w
+	end
+	table.sort(list)
+	writefile(CUSTOM_WORDS_FILE, table.concat(list, "\n"))
 end
-table.sort(list)
-writefile(CUSTOM_WORDS_FILE, table.concat(list, "\n"))
+
+local function ClearMistakes()
+	for w in pairs(Blacklist) do
+		Blacklist[w] = nil
+	end
+	ClearCaches()
+end
+
+local function BlacklistWord(word)
+	word = tostring(word or ""):lower():gsub("%s+", "")
+	if word ~= "" then
+		Blacklist[word] = true
+		ClearCaches()
+	end
 end
 
 LoadDictionaries()
 LoadCustomWords()
 
 do
-local saved = false
-
-local function SaveOnce()  
-	if saved then  
-		return  
-	end  
-	saved = true  
-	pcall(SaveCustomWords)  
-end  
-
-player.AncestryChanged:Connect(function(_, parent)  
-	if parent == nil then  
-		SaveOnce()  
-	end  
-end)  
-
-pcall(function()  
-	game:BindToClose(function()  
-		SaveOnce()  
-	end)  
-end)
-
+	local saved = false
+	local function SaveOnce()
+		if saved then
+			return
+		end
+		saved = true
+		pcall(SaveCustomWords)
+	end
+	player.AncestryChanged:Connect(function(_, parent)
+		if parent == nil then
+			SaveOnce()
+		end
+	end)
+	pcall(function()
+		game:BindToClose(function()
+			SaveOnce()
+		end)
+	end)
 end
 
 local screenGui = Instance.new("ScreenGui")
@@ -255,10 +209,7 @@ mainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
 mainFrame.BackgroundTransparency = 0.05
 mainFrame.BorderSizePixel = 0
 mainFrame.Parent = screenGui
-
-local mainCorner = Instance.new("UICorner")
-mainCorner.CornerRadius = UDim.new(0, 12)
-mainCorner.Parent = mainFrame
+round(mainFrame, 12)
 
 local titleBar = Instance.new("TextLabel")
 titleBar.Size = UDim2.new(1, 0, 0, 34)
@@ -270,39 +221,26 @@ titleBar.Font = Enum.Font.GothamBold
 titleBar.TextSize = 16
 titleBar.Active = true
 titleBar.Parent = mainFrame
+round(titleBar, 12)
 
-local titleCorner = Instance.new("UICorner")
-titleCorner.CornerRadius = UDim.new(0, 12)
-titleCorner.Parent = titleBar
-
-local dragging = false
-local dragStart
-local startPos
-
+local dragging, dragStart, startPos = false, nil, nil
 titleBar.InputBegan:Connect(function(input)
-if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-dragging = true
-dragStart = input.Position
-startPos = mainFrame.Position
-end
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		dragging = true
+		dragStart = input.Position
+		startPos = mainFrame.Position
+	end
 end)
-
 titleBar.InputEnded:Connect(function(input)
-if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-dragging = false
-end
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		dragging = false
+	end
 end)
-
 UserInputService.InputChanged:Connect(function(input)
-if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-local delta = input.Position - dragStart
-mainFrame.Position = UDim2.new(
-startPos.X.Scale,
-startPos.X.Offset + delta.X,
-startPos.Y.Scale,
-startPos.Y.Offset + delta.Y
-)
-end
+	if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+		local delta = input.Position - dragStart
+		mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+	end
 end)
 
 local buttonFrame = Instance.new("Frame")
@@ -328,10 +266,7 @@ searchBox.TextSize = 13
 searchBox.ClearTextOnFocus = false
 searchBox.Text = ""
 searchBox.Parent = mainFrame
-
-local searchBoxCorner = Instance.new("UICorner")
-searchBoxCorner.CornerRadius = UDim.new(0, 6)
-searchBoxCorner.Parent = searchBox
+round(searchBox, 6)
 
 local modeBtn = Instance.new("TextButton")
 modeBtn.Size = UDim2.new(0, 40, 0, 28)
@@ -343,10 +278,7 @@ modeBtn.TextColor3 = Color3.new(1, 1, 1)
 modeBtn.Font = Enum.Font.GothamSemibold
 modeBtn.TextSize = 11
 modeBtn.Parent = mainFrame
-
-local modeBtnCorner = Instance.new("UICorner")
-modeBtnCorner.CornerRadius = UDim.new(0, 6)
-modeBtnCorner.Parent = modeBtn
+round(modeBtn, 6)
 
 local resultsFrame = Instance.new("ScrollingFrame")
 resultsFrame.Size = UDim2.new(0, 180, 0, 204)
@@ -358,10 +290,7 @@ resultsFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
 resultsFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
 resultsFrame.ClipsDescendants = true
 resultsFrame.Parent = mainFrame
-
-local resultsCorner = Instance.new("UICorner")
-resultsCorner.CornerRadius = UDim.new(0, 8)
-resultsCorner.Parent = resultsFrame
+round(resultsFrame, 8)
 
 local resultsPadding = Instance.new("UIPadding")
 resultsPadding.PaddingTop = UDim.new(0, 5)
@@ -375,466 +304,337 @@ resultsLayout.Padding = UDim.new(0, 5)
 resultsLayout.SortOrder = Enum.SortOrder.LayoutOrder
 resultsLayout.Parent = resultsFrame
 
-local suggesterEnabled = false
-local trapModeEnabled = false
-local autoTypeEnabled = false
-local minLength = 3
-local maxLength = 20
-local searchMode = "word"
-local lengthPriority = "normal"
-local uiDirty = true
-local currentPage = 1
-local pageSize = 9
-local lastSearchActive = false
-local minDelay = 0.08
-local maxDelay = 0.1
-local typingLock = false
-local settingsFrame
-
-local function MarkDirty()
-uiDirty = true
-end
-
-local function ResetPagination()
-currentPage = 1
-end
-
-local function MakeButton(text)
-local btn = Instance.new("TextButton")
-btn.Size = UDim2.new(1, 0, 0, 34)
-btn.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
-btn.BorderSizePixel = 0
-btn.Text = text
-btn.TextColor3 = Color3.new(1, 1, 1)
-btn.Font = Enum.Font.GothamSemibold
-btn.TextSize = 13
-btn.Parent = buttonFrame
-
-local corner = Instance.new("UICorner")  
-corner.CornerRadius = UDim.new(0, 8)  
-corner.Parent = btn  
-
-return btn
-
-end
-
 local function ApplyPriority(list)
-if #list <= 1 then
-return
-end
-
-if lengthPriority == "longest" then  
-	table.sort(list, function(a, b)  
-		if #a ~= #b then  
-			return #a > #b  
-		end  
-		return a < b  
-	end)  
-elseif lengthPriority == "shortest" then  
-	table.sort(list, function(a, b)  
-		if #a ~= #b then  
-			return #a < #b  
-		end  
-		return a < b  
-	end)  
-else  
-	local target = math.floor((minLength + maxLength) / 2)  
-	table.sort(list, function(a, b)  
-		local da = math.abs(#a - target)  
-		local db = math.abs(#b - target)  
-		if da ~= db then  
-			return da < db  
-		end  
-		if #a ~= #b then  
-			return #a < #b  
-		end  
-		return a < b  
-	end)  
-end
-
+	if #list <= 1 then
+		return
+	end
+	if lengthPriority == "longest" then
+		table.sort(list, function(a, b)
+			return #a == #b and a < b or #a > #b
+		end)
+	elseif lengthPriority == "shortest" then
+		table.sort(list, function(a, b)
+			return #a == #b and a < b or #a < #b
+		end)
+	else
+		local target = math.floor((minLength + maxLength) / 2)
+		table.sort(list, function(a, b)
+			local da, db = math.abs(#a - target), math.abs(#b - target)
+			if da ~= db then
+				return da < db
+			end
+			if #a ~= #b then
+				return #a < #b
+			end
+			return a < b
+		end)
+	end
 end
 
 local function GetPrefixCandidates(prefix)
-if #prefix >= 3 then
-return PrefixBuckets3[prefix:sub(1, 3)] or {}
-end
-if #prefix == 2 then
-return PrefixBuckets2[prefix:sub(1, 2)] or {}
-end
-if #prefix == 1 then
-return PrefixBuckets1[prefix:sub(1, 1)] or {}
-end
-return Words
+	if #prefix >= 3 then return PrefixBuckets3[prefix:sub(1, 3)] or {} end
+	if #prefix == 2 then return PrefixBuckets2[prefix:sub(1, 2)] or {} end
+	if #prefix == 1 then return PrefixBuckets1[prefix:sub(1, 1)] or {} end
+	return Words
 end
 
 local function GetSuffixCandidates(query)
-if #query >= 3 then
-return SuffixBuckets3[query:sub(-3)] or {}
-end
-if #query == 2 then
-return SuffixBuckets2[query:sub(-2)] or {}
-end
-if #query == 1 then
-return SuffixBuckets1[query:sub(-1)] or {}
-end
-return Words
+	if #query >= 3 then return SuffixBuckets3[query:sub(-3)] or {} end
+	if #query == 2 then return SuffixBuckets2[query:sub(-2)] or {} end
+	if #query == 1 then return SuffixBuckets1[query:sub(-1)] or {} end
+	return Words
 end
 
 local function GetCurrentPrefix()
-local inGame = playerGui:FindFirstChild("InGame")
-if not inGame then
-return ""
+	local inGame = playerGui:FindFirstChild("InGame")
+	local frame = inGame and inGame:FindFirstChild("Frame")
+	local container = frame and frame:FindFirstChild("CurrentWord")
+	if not container then return "" end
+	local letters = {}
+	for _, child in ipairs(container:GetChildren()) do
+		if child:IsA("GuiObject") and child.Visible then
+			local lbl = child:FindFirstChild("Letter")
+			if lbl and lbl:IsA("TextLabel") and lbl.Text ~= "" then
+				letters[#letters + 1] = { t = lbl.Text, p = child.AbsolutePosition.X }
+			end
+		end
+	end
+	table.sort(letters, function(a, b)
+		return a.p < b.p
+	end)
+	local prefix = ""
+	for _, letter in ipairs(letters) do
+		prefix ..= letter.t
+	end
+	return prefix:lower()
 end
 
-local frame = inGame:FindFirstChild("Frame")  
-if not frame then  
-	return ""  
-end  
-
-local container = frame:FindFirstChild("CurrentWord")  
-if not container then  
-	return ""  
-end  
-
-local letters = {}  
-for _, child in ipairs(container:GetChildren()) do  
-	if child:IsA("GuiObject") and child.Visible then  
-		local lbl = child:FindFirstChild("Letter")  
-		if lbl and lbl:IsA("TextLabel") and lbl.Text ~= "" then  
-			table.insert(letters, { t = lbl.Text, p = child.AbsolutePosition.X })  
-		end  
-	end  
-end  
-
-table.sort(letters, function(a, b)  
-	return a.p < b.p  
-end)  
-
-local prefix = ""  
-for _, letter in ipairs(letters) do  
-	prefix = prefix .. letter.t  
-end  
-
-return prefix:lower()
-
+local function GetCurrentGameWord()
+	return GetCurrentPrefix()
 end
 
-local function GetPageCount(normalList, customList, size)
-local normalPages = math.max(1, math.ceil(#normalList / size))
-local customPages = math.max(1, math.ceil(#customList / size))
-return math.max(normalPages, customPages)
+local function GetTypeLabel()
+	local inGame = playerGui:FindFirstChild("InGame")
+	local frame = inGame and inGame:FindFirstChild("Frame")
+	local typeLabel = frame and frame:FindFirstChild("Type")
+	if typeLabel and (typeLabel:IsA("TextLabel") or typeLabel:IsA("TextButton")) then
+		return typeLabel
+	end
+	return nil
 end
 
-local function SlicePage(items, page, size)
-local startIndex = ((page - 1) * size) + 1
-local endIndex = math.min(#items, startIndex + size - 1)
-local result = {}
-
-if startIndex > #items then  
-	return result  
-end  
-
-for i = startIndex, endIndex do  
-	table.insert(result, items[i])  
-end  
-
-return result
-
-end
-
-local function GetSuggestions(prefix)
-if SuggestionCache[prefix] then
-return SuggestionCache[prefix]
-end
-
-local normal = {}  
-local custom = {}  
-
-for _, word in ipairs(GetPrefixCandidates(prefix)) do  
-	if word:sub(1, #prefix) == prefix and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then  
-		if CustomWordSet[word] then  
-			table.insert(custom, word)  
-		else  
-			table.insert(normal, word)  
-		end  
-	end  
-end  
-
-ApplyPriority(normal)  
-ApplyPriority(custom)  
-
-SuggestionCache[prefix] = {  
-	normal = normal,  
-	custom = custom,  
-}  
-
-return SuggestionCache[prefix]
-
-end
-
-local function GetSuffixCount(suffix)
-if SuffixCountCache[suffix] ~= nil then
-return SuffixCountCache[suffix]
-end
-
-local count = 0  
-for _, word in ipairs(GetPrefixCandidates(suffix)) do  
-	if word:sub(1, #suffix) == suffix then  
-		count += 1  
-	end  
-end  
-
-SuffixCountCache[suffix] = count  
-return count
-
-end
-
-local function FindTraps(prefix)
-if TrapCache[prefix] then
-return TrapCache[prefix]
-end
-
-local normal = {}  
-local custom = {}  
-local checkedSuffix = {}  
-
-for _, word in ipairs(GetPrefixCandidates(prefix)) do  
-	if word:sub(1, #prefix) == prefix then  
-		local suffix2 = word:sub(-2)  
-		local suffix3 = word:sub(-3)  
-
-		local function handleSuffix(suffix, isManual)  
-			if #suffix >= 2 and not checkedSuffix[suffix] then  
-				checkedSuffix[suffix] = true  
-
-				local isTrap = false  
-				if isManual then  
-					isTrap = true  
-				else  
-					local count = GetSuffixCount(suffix)  
-					if count > 0 and count <= 6 then  
-						isTrap = true  
-					end  
-				end  
-
-				if isTrap then  
-					local text = word .. " -> trap: " .. suffix:upper()  
-					if CustomWordSet[word] then  
-						table.insert(custom, text)  
-					else  
-						table.insert(normal, text)  
-					end  
-				end  
-			end  
-		end  
-
-		handleSuffix(suffix3, ManualTrap3[suffix3] == true)  
-		handleSuffix(suffix2, ManualTrap2[suffix2] == true)  
-	end  
-end  
-
-ApplyPriority(normal)  
-ApplyPriority(custom)  
-
-TrapCache[prefix] = {  
-	normal = normal,  
-	custom = custom,  
-}  
-
-return TrapCache[prefix]
-
-end
-
-local function SearchWords(query, mode)
-local key = mode .. "|" .. query .. "|" .. lengthPriority .. "|" .. tostring(minLength) .. "|" .. tostring(maxLength)
-if SearchCache[key] then
-return SearchCache[key]
-end
-
-local normal = {}  
-local custom = {}  
-
-if mode == "word" then  
-	for _, word in ipairs(Words) do  
-		if word:find(query, 1, true) and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then  
-			if CustomWordSet[word] then  
-				table.insert(custom, word)  
-			else  
-				table.insert(normal, word)  
-			end  
-		end  
-	end  
-elseif mode == "prefix" then  
-	for _, word in ipairs(GetPrefixCandidates(query)) do  
-		if word:sub(1, #query) == query and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then  
-			if CustomWordSet[word] then  
-				table.insert(custom, word)  
-			else  
-				table.insert(normal, word)  
-			end  
-		end  
-	end  
-elseif mode == "suffix" then  
-	for _, word in ipairs(GetSuffixCandidates(query)) do  
-		if word:sub(-#query) == query and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then  
-			if CustomWordSet[word] then  
-				table.insert(custom, word)  
-			else  
-				table.insert(normal, word)  
-			end  
-		end  
-	end  
-end  
-
-ApplyPriority(normal)  
-ApplyPriority(custom)  
-
-SearchCache[key] = {  
-	normal = normal,  
-	custom = custom  
-}  
-
-return SearchCache[key]
-
-end
-
-local function FormatThreePerLine(items)
-local lines = {}
-for i = 1, #items, 3 do
-local line = {}
-table.insert(line, items[i])
-if items[i + 1] then
-table.insert(line, items[i + 1])
-end
-if items[i + 2] then
-table.insert(line, items[i + 2])
-end
-table.insert(lines, table.concat(line, ", "))
-end
-return lines
-end
-
-local function BuildSection(title, items, emptyText)
-if #items > 0 then
-return title .. "\n" .. table.concat(FormatThreePerLine(items), "\n")
-end
-return title .. "\n" .. emptyText
-end
-
-local function GetActivePageCount()
-local query = searchBox.Text:gsub("^%s+", ""):gsub("%s+$", ""):lower()
-
-if query ~= "" then  
-	local data = SearchWords(query, searchMode)  
-	return GetPageCount(data.normal, data.custom, pageSize)  
-end  
-
-local prefix = GetCurrentPrefix()  
-if prefix == "" then  
-	return 1  
-end  
-
-local totalPages = 1  
-
-if suggesterEnabled then  
-	local data = GetSuggestions(prefix)  
-	totalPages = math.max(totalPages, GetPageCount(data.normal, data.custom, pageSize))  
-end  
-
-if trapModeEnabled then  
-	local data = FindTraps(prefix)  
-	totalPages = math.max(totalPages, GetPageCount(data.normal, data.custom, pageSize))  
-end  
-
-return totalPages
-
+local function IsAutoPlayTurn()
+	local typeLabel = GetTypeLabel()
+	if not typeLabel then return false end
+	local text = tostring(typeLabel.Text or "")
+	return text ~= "" and string.find(string.lower(text), string.lower(player.Name), 1, true) ~= nil
 end
 
 local function RemoveResultChildren()
-for _, child in ipairs(resultsFrame:GetChildren()) do
-if child ~= resultsLayout and child ~= resultsPadding then
-child:Destroy()
-end
-end
+	for _, child in ipairs(resultsFrame:GetChildren()) do
+		if child ~= resultsLayout and child ~= resultsPadding then
+			child:Destroy()
+		end
+	end
 end
 
 local function MakeHeader(text)
-local label = Instance.new("TextLabel")
-label.Size = UDim2.new(1, 0, 0, 18)
-label.BackgroundTransparency = 1
-label.Text = text
-label.TextColor3 = Color3.new(1, 1, 1)
-label.Font = Enum.Font.GothamBold
-label.TextSize = 12
-label.TextXAlignment = Enum.TextXAlignment.Left
-label.Parent = resultsFrame
-return label
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.new(1, 0, 0, 18)
+	label.BackgroundTransparency = 1
+	label.Text = text
+	label.TextColor3 = Color3.new(1, 1, 1)
+	label.Font = Enum.Font.GothamBold
+	label.TextSize = 12
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.Parent = resultsFrame
+	return label
 end
 
 local function MakeEmpty(text)
-local label = Instance.new("TextLabel")
-label.Size = UDim2.new(1, 0, 0, 18)
-label.BackgroundTransparency = 1
-label.Text = text
-label.TextColor3 = Color3.fromRGB(210, 210, 210)
-label.Font = Enum.Font.Gotham
-label.TextSize = 11
-label.TextXAlignment = Enum.TextXAlignment.Left
-label.Parent = resultsFrame
-return label
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.new(1, 0, 0, 18)
+	label.BackgroundTransparency = 1
+	label.Text = text
+	label.TextColor3 = Color3.fromRGB(210, 210, 210)
+	label.Font = Enum.Font.Gotham
+	label.TextSize = 11
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.Parent = resultsFrame
+	return label
 end
 
-local function VkToKeyCode(vk)
-	if vk == 0x10 then
-		return Enum.KeyCode.LeftShift
-	end
-	if vk == 0x0D then
-		return Enum.KeyCode.Return
-	end
-	local ch = string.char(vk)
-	return Enum.KeyCode[ch]
+local function GetPageCount(normalList, customList, size)
+	return math.max(math.max(1, math.ceil(#normalList / size)), math.max(1, math.ceil(#customList / size)))
 end
 
-local function PressVk(vk)
-	local ok = false
-	if type(keypress) == "function" then
-		ok = pcall(function()
-			keypress(vk)
-		end)
+local function SlicePage(items, page, size)
+	local startIndex = ((page - 1) * size) + 1
+	local endIndex = math.min(#items, startIndex + size - 1)
+	local result = {}
+	if startIndex > #items then return result end
+	for i = startIndex, endIndex do
+		result[#result + 1] = items[i]
 	end
-	if not ok then
-		local keyCode = VkToKeyCode(vk)
-		if keyCode then
-			pcall(function()
-				game:GetService("VirtualInputManager"):SendKeyEvent(true, keyCode, false, game)
-			end)
+	return result
+end
+
+local function SearchWordMatches(word, query, mode, context)
+	word = tostring(word or ""):lower()
+	query = tostring(query or ""):lower()
+	context = tostring(context or ""):lower()
+	if query == "" then
+		return false
+	end
+
+	if mode == "prefix" then
+		if context ~= "" and word:sub(1, #context) ~= context then
+			return false
+		end
+		return word:sub(1, #query) == query
+	elseif mode == "suffix" then
+		if context ~= "" and word:sub(1, #context) ~= context then
+			return false
+		end
+		return word:sub(-#query) == query
+	else
+		if context ~= "" then
+			return word:find(context, 1, true) ~= nil and word:find(query, 1, true) ~= nil
+		end
+		return word:find(query, 1, true) ~= nil
+	end
+end
+
+local function GetSuggestions(prefix)
+	local key = prefix .. "|" .. lengthPriority .. "|" .. tostring(minLength) .. "|" .. tostring(maxLength)
+	if SuggestionCache[key] then return SuggestionCache[key] end
+
+	local normal, custom = {}, {}
+	for _, word in ipairs(GetPrefixCandidates(prefix)) do
+		if not IsBlacklisted(word) and word:sub(1, #prefix) == prefix and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
+			if CustomWordSet[word] then
+				custom[#custom + 1] = word
+			else
+				normal[#normal + 1] = word
+			end
 		end
 	end
+
+	ApplyPriority(normal)
+	ApplyPriority(custom)
+	SuggestionCache[key] = { normal = normal, custom = custom }
+	return SuggestionCache[key]
 end
 
-local function ReleaseVk(vk)
-	local ok = false
-	if type(keyrelease) == "function" then
-		ok = pcall(function()
-			keyrelease(vk)
-		end)
-	end
-	if not ok then
-		local keyCode = VkToKeyCode(vk)
-		if keyCode then
-			pcall(function()
-				game:GetService("VirtualInputManager"):SendKeyEvent(false, keyCode, false, game)
-			end)
+local function GetCustomFallback(prefix)
+	local out = {}
+	for word in pairs(CustomWordSet) do
+		if not IsBlacklisted(word) and word:sub(1, #prefix) == prefix and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
+			out[#out + 1] = word
 		end
+	end
+	ApplyPriority(out)
+	return out
+end
+
+local function GetSuffixCount(suffix)
+	if SuffixCountCache[suffix] ~= nil then return SuffixCountCache[suffix] end
+	local count = 0
+	for _, word in ipairs(GetPrefixCandidates(suffix)) do
+		if not IsBlacklisted(word) and word:sub(1, #suffix) == suffix then
+			count += 1
+		end
+	end
+	SuffixCountCache[suffix] = count
+	return count
+end
+
+local function FindTraps(prefix)
+	if TrapCache[prefix] then return TrapCache[prefix] end
+
+	local normal, custom, checkedSuffix = {}, {}, {}
+	for _, word in ipairs(GetPrefixCandidates(prefix)) do
+		if not IsBlacklisted(word) and word:sub(1, #prefix) == prefix then
+			local suffix2, suffix3 = word:sub(-2), word:sub(-3)
+			local function handleSuffix(suffix, isManual)
+				if #suffix >= 2 and not checkedSuffix[suffix] then
+					checkedSuffix[suffix] = true
+					local isTrap = isManual or (GetSuffixCount(suffix) > 0 and GetSuffixCount(suffix) <= 6)
+					if isTrap then
+						local text = word .. " -> trap: " .. suffix:upper()
+						if CustomWordSet[word] then
+							custom[#custom + 1] = text
+						else
+							normal[#normal + 1] = text
+						end
+					end
+				end
+			end
+			handleSuffix(suffix3, ManualTrap3[suffix3] == true)
+			handleSuffix(suffix2, ManualTrap2[suffix2] == true)
+		end
+	end
+
+	ApplyPriority(normal)
+	ApplyPriority(custom)
+	TrapCache[prefix] = { normal = normal, custom = custom }
+	return TrapCache[prefix]
+end
+
+local function SearchWords(query, mode)
+	local context = suggesterEnabled and GetCurrentPrefix() or ""
+	local key = mode .. "|" .. query .. "|" .. context .. "|" .. lengthPriority .. "|" .. tostring(minLength) .. "|" .. tostring(maxLength)
+	if SearchCache[key] then
+		return SearchCache[key]
+	end
+
+	local normal, custom = {}, {}
+	if mode == "word" then
+		for _, word in ipairs(Words) do
+			if not IsBlacklisted(word) and SearchWordMatches(word, query, mode, context) and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
+				if CustomWordSet[word] then
+					custom[#custom + 1] = word
+				else
+					normal[#normal + 1] = word
+				end
+			end
+		end
+	elseif mode == "prefix" then
+		for _, word in ipairs(GetPrefixCandidates(query)) do
+			if not IsBlacklisted(word) and SearchWordMatches(word, query, mode, context) and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
+				if CustomWordSet[word] then
+					custom[#custom + 1] = word
+				else
+					normal[#normal + 1] = word
+				end
+			end
+		end
+	elseif mode == "suffix" then
+		for _, word in ipairs(GetSuffixCandidates(query)) do
+			if not IsBlacklisted(word) and SearchWordMatches(word, query, mode, context) and #word >= minLength and (lengthPriority == "longest" or #word <= maxLength) then
+				if CustomWordSet[word] then
+					custom[#custom + 1] = word
+				else
+					normal[#normal + 1] = word
+				end
+			end
+		end
+	end
+
+	ApplyPriority(normal)
+	ApplyPriority(custom)
+	SearchCache[key] = { normal = normal, custom = custom }
+	return SearchCache[key]
+end
+
+local function GetActivePageCount()
+	local query = searchBox.Text:gsub("^%s+", ""):gsub("%s+$", ""):lower()
+	if query ~= "" then
+		local data = SearchWords(query, searchMode)
+		return GetPageCount(data.normal, data.custom, pageSize)
+	end
+	local prefix = GetCurrentPrefix()
+	if prefix == "" then
+		return 1
+	end
+	local totalPages = 1
+	if suggesterEnabled then
+		local data = GetSuggestions(prefix)
+		totalPages = math.max(totalPages, GetPageCount(data.normal, data.custom, pageSize))
+	end
+	if trapModeEnabled then
+		local data = FindTraps(prefix)
+		totalPages = math.max(totalPages, GetPageCount(data.normal, data.custom, pageSize))
+	end
+	return totalPages
+end
+
+local function PressKeyCode(keyCode)
+	pcall(function()
+		VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+		task.wait(0.03)
+		VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+	end)
+end
+
+local function PressEnter()
+	PressKeyCode(Enum.KeyCode.Return)
+end
+
+local function PressBackspaceTimes(count)
+	for _ = 1, math.max(0, count) do
+		PressKeyCode(Enum.KeyCode.Backspace)
+		task.wait(0.02)
 	end
 end
 
 local function FireKeyObject(obj)
-	for _, signal in ipairs({"MouseButton1Click","Activated","InputBegan"}) do
-		if obj[signal] then
-			for _, v in ipairs(getconnections(obj[signal])) do
+	for _, signal in ipairs({ "MouseButton1Click", "Activated", "InputBegan" }) do
+		local s = obj[signal]
+		if s then
+			for _, conn in ipairs(getconnections(s)) do
 				pcall(function()
-					v:Fire()
+					conn:Fire()
 				end)
 			end
 		end
@@ -842,22 +642,16 @@ local function FireKeyObject(obj)
 end
 
 local function FindKeyObject(char)
-	local player = game:GetService("Players").LocalPlayer
 	local gui = player:FindFirstChild("PlayerGui")
-	if not gui then return nil end
-
-	local overbar = gui:FindFirstChild("Overbar")
-	if not overbar then return nil end
-
-	local frame = overbar:FindFirstChild("Frame")
-	if not frame then return nil end
-
-	local keyboard = frame:FindFirstChild("Keyboard")
-	if not keyboard then return nil end
+	local overbar = gui and gui:FindFirstChild("Overbar")
+	local frame = overbar and overbar:FindFirstChild("Frame")
+	local keyboard = frame and frame:FindFirstChild("Keyboard")
+	if not keyboard then
+		return nil
+	end
 
 	char = char:upper()
-
-	for _, rowName in ipairs({"1","2","3"}) do
+	for _, rowName in ipairs({ "1", "2", "3" }) do
 		local row = keyboard:FindFirstChild(rowName)
 		if row then
 			for _, keyObj in ipairs(row:GetChildren()) do
@@ -867,23 +661,122 @@ local function FindKeyObject(char)
 			end
 		end
 	end
-
 	return nil
 end
 
-local function TypeWordHumanized(word)
+local function reactionDelay()
+	task.wait(math.random(30, 100) / 100)
+end
+
+local function rejectReactionDelay()
+	task.wait(math.random(30, 50) / 100)
+end
+
+local function blacklistAndRemoveFromCaches(word)
+	word = tostring(word or ""):lower():gsub("%s+", "")
+	if word ~= "" then
+		Blacklist[word] = true
+		ClearCaches()
+	end
+end
+
+local function PickAutoPlayWord(prefix)
+	local data = GetSuggestions(prefix)
+	local combined = {}
+	for _, word in ipairs(data.normal) do
+		if not IsBlacklisted(word) and not UsedWords[word] then
+			combined[#combined + 1] = word
+		end
+	end
+	for _, word in ipairs(data.custom) do
+		if not IsBlacklisted(word) and not UsedWords[word] then
+			combined[#combined + 1] = word
+		end
+	end
+	if #combined == 0 then
+		local fallback = GetCustomFallback(prefix)
+		for _, word in ipairs(fallback) do
+			if not IsBlacklisted(word) and not UsedWords[word] then
+				combined[#combined + 1] = word
+			end
+		end
+	end
+	return combined[1]
+end
+
+local function verifyWord(targetWord, currentDetected, verifyStart)
+	local accepted = false
+	while (tick() - verifyStart) < 1.5 do
+		local currentCheck = GetCurrentGameWord()
+		if currentCheck == "" then
+			accepted = true
+			break
+		end
+		if currentCheck ~= targetWord and currentCheck ~= currentDetected then
+			blacklistAndRemoveFromCaches(targetWord)
+			blacklistAndRemoveFromCaches(currentCheck)
+			accepted = true
+			break
+		end
+		task.wait(0.05)
+	end
+	return accepted
+end
+
+local function handleRejectedWord(targetWord)
+	blacklistAndRemoveFromCaches(targetWord)
+	rejectReactionDelay()
+
+	local current = GetCurrentGameWord()
+	if current ~= "" then
+		PressBackspaceTimes(#current)
+	else
+		PressBackspaceTimes(#targetWord)
+	end
+
+	rejectReactionDelay()
+	lastDetected = "---"
+	isTyping = false
+	forceUpdateList = true
+	typingLock = false
+	lastAutoChosen = ""
+end
+
+local function handleAcceptedWord(targetWord)
+	local current = GetCurrentGameWord()
+	if #current > 0 then
+		PressBackspaceTimes(#current)
+	end
+	reactionDelay()
+	PressEnter()
+	UsedWords[targetWord] = true
+	isMyTurnLogDetected = false
+	task.wait(0.2)
+	typingLock = false
+	lastAutoChosen = ""
+end
+
+local function TypeWordAutoPlay(word)
+	if not AutoPlayEnabled or typingLock or not IsAutoPlayTurn() then
+		return
+	end
+
 	task.spawn(function()
+		typingLock, isTyping = true, true
 		local ok, err = pcall(function()
+			reactionDelay()
 			local fullWord = tostring(word or ""):lower()
-			if #fullWord == 0 then return end
+			if #fullWord == 0 then
+				typingLock, isTyping = false, false
+				return
+			end
 
 			local prefix = tostring(GetCurrentPrefix() or ""):lower()
-
 			local startIndex = 1
 			if prefix ~= "" then
 				local maxLen = math.min(#prefix, #fullWord)
 				for i = 1, maxLen do
-					if prefix:sub(i,i) ~= fullWord:sub(i,i) then
+					if prefix:sub(i, i) ~= fullWord:sub(i, i) then
 						break
 					end
 					startIndex = i + 1
@@ -891,15 +784,17 @@ local function TypeWordHumanized(word)
 			end
 
 			local remaining = fullWord:sub(startIndex)
-			if #remaining == 0 then return end
+			if #remaining == 0 then
+				reactionDelay()
+				PressEnter()
+				typingLock, isTyping = false, false
+				return
+			end
 
 			local function GetHumanDelay(i, total)
 				local base = math.random() * (maxDelay - minDelay) + minDelay
 				local delay = base
-
-				local isSpeedTypist = (minDelay >= 0.05 and maxDelay <= 0.09)
-
-				if isSpeedTypist then
+				if minDelay >= 0.05 and maxDelay <= 0.09 then
 					delay = delay + (math.random() - 0.5) * 0.015
 				else
 					if i / total < 0.2 then
@@ -909,130 +804,157 @@ local function TypeWordHumanized(word)
 					end
 					delay = delay + (math.random() - 0.5) * 0.03
 				end
-
 				if math.random() < 0.08 then
 					delay = delay + math.random(12, 28) / 100
 				end
-
 				if math.random() < 0.15 then
 					delay = delay + math.random(5, 10) / 100
 				end
-
 				return math.clamp(delay, minDelay, maxDelay + 0.3)
 			end
 
 			for i = 1, #remaining do
 				local char = remaining:sub(i, i)
-
 				if char:match("%a") then
 					local keyObj = FindKeyObject(char)
 					if keyObj then
 						FireKeyObject(keyObj)
 					end
 				end
-
 				task.wait(GetHumanDelay(i, #remaining))
 			end
 
-			task.wait(GetHumanDelay(#remaining, #remaining) + math.random(5,15)/100)
+			task.wait(GetHumanDelay(#remaining, #remaining) + math.random(5, 15) / 100)
+			PressEnter()
 
-			PressVk(13)
-			task.wait(0.03)
-			ReleaseVk(13)
-
-			pcall(function()
-				game:GetService("VirtualInputManager"):SendKeyEvent(true, Enum.KeyCode.Return, false, game)
-				task.wait(0.03)
-				game:GetService("VirtualInputManager"):SendKeyEvent(false, Enum.KeyCode.Return, false, game)
-			end)
+			local verifyStart = tick()
+			local accepted = verifyWord(fullWord, prefix, verifyStart)
+			if not accepted then
+				handleRejectedWord(fullWord)
+			else
+				handleAcceptedWord(fullWord)
+			end
 		end)
-
 		if not ok then
 			warn(err)
 		end
+		typingLock, isTyping = false, false
+	end)
+end
+
+local function TypeWordFromButton(word)
+	if typingLock then
+		return
+	end
+
+	task.spawn(function()
+		typingLock = true
+
+		local fullWord = tostring(word or ""):lower()
+		if #fullWord == 0 then
+			typingLock = false
+			return
+		end
+
+		local prefix = tostring(GetCurrentPrefix() or ""):lower()
+		local startIndex = 1
+		if prefix ~= "" then
+			local maxLen = math.min(#prefix, #fullWord)
+			for i = 1, maxLen do
+				if prefix:sub(i, i) ~= fullWord:sub(i, i) then
+					break
+				end
+				startIndex = i + 1
+			end
+		end
+
+		local remaining = fullWord:sub(startIndex)
+		local function GetButtonDelay()
+			return math.random() * (maxDelay - minDelay) + minDelay
+		end
+
+		for i = 1, #remaining do
+			local char = remaining:sub(i, i)
+			if char:match("%a") then
+				local keyObj = FindKeyObject(char)
+				if keyObj then
+					FireKeyObject(keyObj)
+				end
+			end
+			if i < #remaining then
+				task.wait(GetButtonDelay())
+			end
+		end
+
+		task.wait(GetButtonDelay())
+		PressEnter()
+		typingLock = false
 	end)
 end
 
 local function MakeWordButton(parent, text, value)
-local btn = Instance.new("TextButton")
-btn.Size = UDim2.new(0.32, -2, 0, 24)
-btn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
-btn.BorderSizePixel = 0
-btn.Text = text
-btn.TextColor3 = Color3.new(1, 1, 1)
-btn.Font = Enum.Font.Gotham
-btn.TextSize = 10
-btn.TextWrapped = true
-btn.Parent = parent
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.new(0.32, -2, 0, 24)
+	btn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+	btn.BorderSizePixel = 0
+	btn.Text = text
+	btn.TextColor3 = Color3.new(1, 1, 1)
+	btn.Font = Enum.Font.Gotham
+	btn.TextSize = 10
+	btn.TextWrapped = true
+	btn.Parent = parent
+	round(btn, 6)
 
-local corner = Instance.new("UICorner")  
-corner.CornerRadius = UDim.new(0, 6)  
-corner.Parent = btn  
+	btn.MouseButton1Click:Connect(function()
+		if AutoTypeEnabled then
+			if value and value ~= "" then
+				TypeWordFromButton(value)
+			end
+		else
+			searchBox.Text = value or ""
+		end
+	end)
 
-btn.MouseButton1Click:Connect(function()  
-	if autoTypeEnabled and value and value ~= "" then  
-		TypeWordHumanized(value)  
-	else  
-		searchBox.Text = value or ""  
-	end  
-end)  
-
-return btn
-
+	return btn
 end
 
 local function MakeRow(entries)
-local row = Instance.new("Frame")
-row.Size = UDim2.new(1, 0, 0, 26)
-row.BackgroundTransparency = 1
-row.Parent = resultsFrame
+	local row = Instance.new("Frame")
+	row.Size = UDim2.new(1, 0, 0, 26)
+	row.BackgroundTransparency = 1
+	row.Parent = resultsFrame
 
-local positions = {  
-	UDim2.new(0, 0, 0, 0),  
-	UDim2.new(0.34, 0, 0, 0),  
-	UDim2.new(0.68, 0, 0, 0)  
-}  
+	local positions = { UDim2.new(0, 0, 0, 0), UDim2.new(0.34, 0, 0, 0), UDim2.new(0.68, 0, 0, 0) }
+	for i = 1, 3 do
+		local entry = entries[i]
+		if entry then
+			local btn = MakeWordButton(row, entry.display, entry.value)
+			btn.Position = positions[i]
+		end
+	end
 
-for i = 1, 3 do  
-	local entry = entries[i]  
-	if entry then  
-		local btn = MakeWordButton(row, entry.display, entry.value)  
-		btn.Position = positions[i]  
-	end  
-end  
-
-return row
-
+	return row
 end
 
 local function BuildSectionItems(title, entries, emptyText)
-MakeHeader(title)
-if #entries == 0 then
-MakeEmpty(emptyText)
-return
-end
-
-for i = 1, #entries, 3 do  
-	MakeRow({  
-		entries[i],  
-		entries[i + 1],  
-		entries[i + 2]  
-	})  
-end
-
+	MakeHeader(title)
+	if #entries == 0 then
+		MakeEmpty(emptyText)
+		return
+	end
+	for i = 1, #entries, 3 do
+		MakeRow({ entries[i], entries[i + 1], entries[i + 2] })
+	end
 end
 
 settingsFrame = Instance.new("Frame")
-settingsFrame.Size = UDim2.new(0, 290, 0, 330)
-settingsFrame.Position = UDim2.new(0.5, -145, 0.5, -165)
+settingsFrame.Size = UDim2.new(0, 290, 0, 356)
+settingsFrame.Position = UDim2.new(0.5, -145, 0.5, -178)
 settingsFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
 settingsFrame.BorderSizePixel = 0
 settingsFrame.Visible = false
 settingsFrame.Parent = screenGui
-
-local settingsCorner = Instance.new("UICorner")
-settingsCorner.CornerRadius = UDim.new(0, 12)
-settingsCorner.Parent = settingsFrame
+round(settingsFrame, 12)
 
 local sfTitle = Instance.new("TextLabel")
 sfTitle.Size = UDim2.new(1, 0, 0, 34)
@@ -1043,10 +965,7 @@ sfTitle.TextColor3 = Color3.new(1, 1, 1)
 sfTitle.Font = Enum.Font.GothamBold
 sfTitle.TextSize = 16
 sfTitle.Parent = settingsFrame
-
-local sfTitleCorner = Instance.new("UICorner")
-sfTitleCorner.CornerRadius = UDim.new(0, 12)
-sfTitleCorner.Parent = sfTitle
+round(sfTitle, 12)
 
 local settingsScroll = Instance.new("ScrollingFrame")
 settingsScroll.Size = UDim2.new(1, -14, 1, -42)
@@ -1058,76 +977,67 @@ settingsScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
 settingsScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
 settingsScroll.Parent = settingsFrame
 
-local settingsPadding = Instance.new("UIPadding")
-settingsPadding.PaddingRight = UDim.new(0, 3)
-settingsPadding.PaddingBottom = UDim.new(0, 6)
-settingsPadding.Parent = settingsScroll
-
 local settingsLayout = Instance.new("UIListLayout")
 settingsLayout.Padding = UDim.new(0, 7)
 settingsLayout.SortOrder = Enum.SortOrder.LayoutOrder
 settingsLayout.Parent = settingsScroll
 
 local function makeRow(labelText, defaultValue)
-local row = Instance.new("Frame")
-row.Size = UDim2.new(1, 0, 0, 28)
-row.BackgroundTransparency = 1
-row.Parent = settingsScroll
+	local row = Instance.new("Frame")
+	row.Size = UDim2.new(1, 0, 0, 28)
+	row.BackgroundTransparency = 1
+	row.Parent = settingsScroll
 
-local label = Instance.new("TextLabel")  
-label.Size = UDim2.new(0.58, 0, 1, 0)  
-label.BackgroundTransparency = 1  
-label.Text = labelText  
-label.TextColor3 = Color3.new(1, 1, 1)  
-label.Font = Enum.Font.Gotham  
-label.TextSize = 13  
-label.TextXAlignment = Enum.TextXAlignment.Left  
-label.Parent = row  
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.new(0.58, 0, 1, 0)
+	label.BackgroundTransparency = 1
+	label.Text = labelText
+	label.TextColor3 = Color3.new(1, 1, 1)
+	label.Font = Enum.Font.Gotham
+	label.TextSize = 13
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.Parent = row
 
-local box = Instance.new("TextBox")  
-box.Size = UDim2.new(0.4, 0, 1, 0)  
-box.Position = UDim2.new(0.6, 0, 0, 0)  
-box.Text = tostring(defaultValue)  
-box.BackgroundColor3 = Color3.fromRGB(40, 40, 50)  
-box.BorderSizePixel = 0  
-box.TextColor3 = Color3.new(1, 1, 1)  
-box.Font = Enum.Font.Gotham  
-box.TextSize = 13  
-box.ClearTextOnFocus = false  
-box.Parent = row  
+	local box = Instance.new("TextBox")
+	box.Size = UDim2.new(0.4, 0, 1, 0)
+	box.Position = UDim2.new(0.6, 0, 0, 0)
+	box.Text = tostring(defaultValue)
+	box.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+	box.BorderSizePixel = 0
+	box.TextColor3 = Color3.new(1, 1, 1)
+	box.Font = Enum.Font.Gotham
+	box.TextSize = 13
+	box.ClearTextOnFocus = false
+	box.Parent = row
+	round(box, 6)
 
-local corner = Instance.new("UICorner")  
-corner.CornerRadius = UDim.new(0, 6)  
-corner.Parent = box  
-
-return label, box
-
+	return label, box
 end
 
-local minLabel, minBox = makeRow("Min Length:", minLength)
+local _, minBox = makeRow("Min Length:", minLength)
 minBox.FocusLost:Connect(function()
-local n = tonumber(minBox.Text)
-if n and n >= 1 then
-minLength = n
-ClearCaches()
-ResetPagination()
-MarkDirty()
-else
-minBox.Text = tostring(minLength)
-end
+	local n = tonumber(minBox.Text)
+	if n and n >= 1 then
+		minLength = n
+		ClearCaches()
+		currentPage = 1
+		uiDirty = true
+	else
+		minBox.Text = tostring(minLength)
+	end
 end)
 
-local maxLabel, maxBox = makeRow("Max Length:", maxLength)
+local _, maxBox = makeRow("Max Length:", maxLength)
 maxBox.FocusLost:Connect(function()
-local n = tonumber(maxBox.Text)
-if n and n >= minLength then
-maxLength = n
-ClearCaches()
-ResetPagination()
-MarkDirty()
-else
-maxBox.Text = tostring(maxLength)
-end
+	local n = tonumber(maxBox.Text)
+	if n and n >= minLength then
+		maxLength = n
+		ClearCaches()
+		currentPage = 1
+		uiDirty = true
+	else
+		maxBox.Text = tostring(maxLength)
+	end
 end)
 
 local priorityRow = Instance.new("Frame")
@@ -1154,38 +1064,34 @@ priorityBtn.TextColor3 = Color3.new(1, 1, 1)
 priorityBtn.Font = Enum.Font.GothamSemibold
 priorityBtn.TextSize = 13
 priorityBtn.Parent = priorityRow
-
-local priorityCorner = Instance.new("UICorner")
-priorityCorner.CornerRadius = UDim.new(0, 6)
-priorityCorner.Parent = priorityBtn
+round(priorityBtn, 6)
 
 local function UpdatePriorityButton()
-if lengthPriority == "longest" then
-priorityBtn.Text = "Longest"
-priorityBtn.BackgroundColor3 = Color3.fromRGB(220, 140, 0)
-elseif lengthPriority == "shortest" then
-priorityBtn.Text = "Shortest"
-priorityBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 220)
-else
-priorityBtn.Text = "Normal"
-priorityBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 80)
-end
+	if lengthPriority == "longest" then
+		priorityBtn.Text = "Longest"
+		priorityBtn.BackgroundColor3 = Color3.fromRGB(220, 140, 0)
+	elseif lengthPriority == "shortest" then
+		priorityBtn.Text = "Shortest"
+		priorityBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 220)
+	else
+		priorityBtn.Text = "Normal"
+		priorityBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 80)
+	end
 end
 
 priorityBtn.MouseButton1Click:Connect(function()
-if lengthPriority == "normal" then
-lengthPriority = "longest"
-elseif lengthPriority == "longest" then
-lengthPriority = "shortest"
-else
-lengthPriority = "normal"
-end
-UpdatePriorityButton()
-ClearCaches()
-ResetPagination()
-MarkDirty()
+	if lengthPriority == "normal" then
+		lengthPriority = "longest"
+	elseif lengthPriority == "longest" then
+		lengthPriority = "shortest"
+	else
+		lengthPriority = "normal"
+	end
+	UpdatePriorityButton()
+	ClearCaches()
+	currentPage = 1
+	uiDirty = true
 end)
-
 UpdatePriorityButton()
 
 local customBlock = Instance.new("Frame")
@@ -1214,10 +1120,7 @@ customBox.Font = Enum.Font.Gotham
 customBox.TextSize = 13
 customBox.ClearTextOnFocus = false
 customBox.Parent = customBlock
-
-local customBoxCorner = Instance.new("UICorner")
-customBoxCorner.CornerRadius = UDim.new(0, 6)
-customBoxCorner.Parent = customBox
+round(customBox, 6)
 
 local addCustomBtn = Instance.new("TextButton")
 addCustomBtn.Size = UDim2.new(0.28, 0, 0, 28)
@@ -1229,34 +1132,25 @@ addCustomBtn.TextColor3 = Color3.new(1, 1, 1)
 addCustomBtn.Font = Enum.Font.GothamSemibold
 addCustomBtn.TextSize = 13
 addCustomBtn.Parent = customBlock
-
-local addCustomCorner = Instance.new("UICorner")
-addCustomCorner.CornerRadius = UDim.new(0, 6)
-addCustomCorner.Parent = addCustomBtn
+round(addCustomBtn, 6)
 
 addCustomBtn.MouseButton1Click:Connect(function()
-local addedAny = false
-
-for word in customBox.Text:gmatch("([^,]+)") do  
-	word = word:lower():gsub("%s+", "")  
-	if #word >= 3 and not CustomWordSet[word] then  
-		CustomWordSet[word] = true  
-		AddWordToBuckets(word, true)  
-		addedAny = true  
-	end  
-end  
-
-customBox.Text = ""  
-ClearCaches()  
-ResetPagination()  
-
-if addedAny then  
-	pcall(SaveCustomWords)  
-end  
-
-MarkDirty()  
-print("Custom words updated: " .. tostring(CountCustomWords()))
-
+	local addedAny = false
+	for word in customBox.Text:gmatch("([^,]+)") do
+		word = word:lower():gsub("%s+", "")
+		if #word >= 3 and not CustomWordSet[word] then
+			CustomWordSet[word] = true
+			AddWordToBuckets(word, true)
+			addedAny = true
+		end
+	end
+	customBox.Text = ""
+	ClearCaches()
+	currentPage = 1
+	if addedAny then
+		pcall(SaveCustomWords)
+	end
+	uiDirty = true
 end)
 
 local autoTypeBtn = Instance.new("TextButton")
@@ -1267,28 +1161,58 @@ autoTypeBtn.TextColor3 = Color3.new(1, 1, 1)
 autoTypeBtn.Font = Enum.Font.GothamSemibold
 autoTypeBtn.TextSize = 13
 autoTypeBtn.Parent = settingsScroll
+round(autoTypeBtn, 6)
 
-local autoTypeCorner = Instance.new("UICorner")
-autoTypeCorner.CornerRadius = UDim.new(0, 6)
-autoTypeCorner.Parent = autoTypeBtn
+local autoPlayBtn = Instance.new("TextButton")
+autoPlayBtn.Size = UDim2.new(1, 0, 0, 28)
+autoPlayBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+autoPlayBtn.BorderSizePixel = 0
+autoPlayBtn.TextColor3 = Color3.new(1, 1, 1)
+autoPlayBtn.Font = Enum.Font.GothamSemibold
+autoPlayBtn.TextSize = 13
+autoPlayBtn.Parent = settingsScroll
+round(autoPlayBtn, 6)
 
 local function UpdateAutoTypeButton()
-if autoTypeEnabled then
-autoTypeBtn.Text = "Auto Type: ON"
-autoTypeBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 80)
-else
-autoTypeBtn.Text = "Auto Type: OFF"
-autoTypeBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+	autoTypeBtn.Text = "Auto Type: " .. (AutoTypeEnabled and "ON" or "OFF")
+	autoTypeBtn.BackgroundColor3 = AutoTypeEnabled and Color3.fromRGB(0, 170, 80) or Color3.fromRGB(40, 40, 50)
 end
+
+local function UpdateAutoPlayButton()
+	autoPlayBtn.Text = "Auto Play: " .. (AutoPlayEnabled and "ON" or "OFF")
+	autoPlayBtn.BackgroundColor3 = AutoPlayEnabled and Color3.fromRGB(0, 170, 80) or Color3.fromRGB(40, 40, 50)
 end
 
 autoTypeBtn.MouseButton1Click:Connect(function()
-autoTypeEnabled = not autoTypeEnabled
-UpdateAutoTypeButton()
-MarkDirty()
+	AutoTypeEnabled = not AutoTypeEnabled
+	UpdateAutoTypeButton()
+	uiDirty = true
+end)
+
+autoPlayBtn.MouseButton1Click:Connect(function()
+	AutoPlayEnabled = not AutoPlayEnabled
+	UpdateAutoPlayButton()
+	uiDirty = true
 end)
 
 UpdateAutoTypeButton()
+UpdateAutoPlayButton()
+
+local clearMistakesBtn = Instance.new("TextButton")
+clearMistakesBtn.Size = UDim2.new(1, 0, 0, 28)
+clearMistakesBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+clearMistakesBtn.BorderSizePixel = 0
+clearMistakesBtn.TextColor3 = Color3.new(1, 1, 1)
+clearMistakesBtn.Font = Enum.Font.GothamSemibold
+clearMistakesBtn.TextSize = 13
+clearMistakesBtn.Text = "Clear Mistakes"
+clearMistakesBtn.Parent = settingsScroll
+round(clearMistakesBtn, 6)
+
+clearMistakesBtn.MouseButton1Click:Connect(function()
+	ClearMistakes()
+	uiDirty = true
+end)
 
 local minDelayRow = Instance.new("Frame")
 minDelayRow.Size = UDim2.new(1, 0, 0, 28)
@@ -1316,23 +1240,20 @@ minDelayBox.Font = Enum.Font.Gotham
 minDelayBox.TextSize = 13
 minDelayBox.ClearTextOnFocus = false
 minDelayBox.Parent = minDelayRow
-
-local minDelayCorner = Instance.new("UICorner")
-minDelayCorner.CornerRadius = UDim.new(0, 6)
-minDelayCorner.Parent = minDelayBox
+round(minDelayBox, 6)
 
 minDelayBox.FocusLost:Connect(function()
-local n = tonumber(minDelayBox.Text)
-if n and n >= 0.01 then
-minDelay = math.clamp(n, 0.01, 1.5)
-if maxDelay < minDelay then
-maxDelay = minDelay
-maxDelayBox.Text = tostring(maxDelay)
-end
-minDelayBox.Text = tostring(minDelay)
-else
-minDelayBox.Text = tostring(minDelay)
-end
+	local n = tonumber(minDelayBox.Text)
+	if n and n >= 0.01 then
+		minDelay = math.clamp(n, 0.01, 1.5)
+		if maxDelay < minDelay then
+			maxDelay = minDelay
+			maxDelayBox.Text = tostring(maxDelay)
+		end
+		minDelayBox.Text = tostring(minDelay)
+	else
+		minDelayBox.Text = tostring(minDelay)
+	end
 end)
 
 local maxDelayRow = Instance.new("Frame")
@@ -1361,86 +1282,99 @@ maxDelayBox.Font = Enum.Font.Gotham
 maxDelayBox.TextSize = 13
 maxDelayBox.ClearTextOnFocus = false
 maxDelayBox.Parent = maxDelayRow
-
-local maxDelayCorner = Instance.new("UICorner")
-maxDelayCorner.CornerRadius = UDim.new(0, 6)
-maxDelayCorner.Parent = maxDelayBox
+round(maxDelayBox, 6)
 
 maxDelayBox.FocusLost:Connect(function()
-local n = tonumber(maxDelayBox.Text)
-if n and n >= minDelay then
-maxDelay = math.clamp(n, minDelay, 2)
-maxDelayBox.Text = tostring(maxDelay)
-else
-maxDelayBox.Text = tostring(maxDelay)
-end
+	local n = tonumber(maxDelayBox.Text)
+	if n and n >= minDelay then
+		maxDelay = math.clamp(n, minDelay, 2)
+		maxDelayBox.Text = tostring(maxDelay)
+	else
+		maxDelayBox.Text = tostring(maxDelay)
+	end
 end)
 
 local function UpdateModeButton()
-if searchMode == "word" then
-modeBtn.Text = "Word"
-modeBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 80)
-elseif searchMode == "suffix" then
-modeBtn.Text = "Suffix"
-modeBtn.BackgroundColor3 = Color3.fromRGB(220, 140, 0)
-else
-modeBtn.Text = "Prefix"
-modeBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 220)
-end
+	if searchMode == "word" then
+		modeBtn.Text = "Word"
+		modeBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 80)
+	elseif searchMode == "suffix" then
+		modeBtn.Text = "Suffix"
+		modeBtn.BackgroundColor3 = Color3.fromRGB(220, 140, 0)
+	else
+		modeBtn.Text = "Prefix"
+		modeBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 220)
+	end
 end
 
 modeBtn.MouseButton1Click:Connect(function()
-if searchMode == "word" then
-searchMode = "suffix"
-elseif searchMode == "suffix" then
-searchMode = "prefix"
-else
-searchMode = "word"
-end
-UpdateModeButton()
-ResetPagination()
-MarkDirty()
+	if searchMode == "word" then
+		searchMode = "suffix"
+	elseif searchMode == "suffix" then
+		searchMode = "prefix"
+	else
+		searchMode = "word"
+	end
+	UpdateModeButton()
+	currentPage = 1
+	uiDirty = true
 end)
-
 UpdateModeButton()
 
 local function StepPage(delta)
-local totalPages = GetActivePageCount()
-if totalPages <= 1 then
-currentPage = 1
-MarkDirty()
-return
+	local totalPages = GetActivePageCount()
+	if totalPages <= 1 then
+		currentPage = 1
+		uiDirty = true
+		return
+	end
+	currentPage = currentPage + delta
+	if currentPage < 1 then
+		currentPage = totalPages
+	elseif currentPage > totalPages then
+		currentPage = 1
+	end
+	uiDirty = true
 end
 
-currentPage = currentPage + delta  
-if currentPage < 1 then  
-	currentPage = totalPages  
-elseif currentPage > totalPages then  
-	currentPage = 1  
-end  
+local suggesterBtn = Instance.new("TextButton")
+suggesterBtn.Size = UDim2.new(1, 0, 0, 34)
+suggesterBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+suggesterBtn.BorderSizePixel = 0
+suggesterBtn.TextColor3 = Color3.new(1, 1, 1)
+suggesterBtn.Font = Enum.Font.GothamSemibold
+suggesterBtn.TextSize = 13
+suggesterBtn.Text = "Suggester: OFF"
+suggesterBtn.Parent = buttonFrame
+round(suggesterBtn, 8)
 
-MarkDirty()
-
-end
-
-local suggesterBtn = MakeButton("Suggester: OFF")
 suggesterBtn.MouseButton1Click:Connect(function()
-suggesterEnabled = not suggesterEnabled
-suggesterBtn.Text = "Suggester: " .. (suggesterEnabled and "ON" or "OFF")
-suggesterBtn.BackgroundColor3 = suggesterEnabled and Color3.fromRGB(0, 170, 80) or Color3.fromRGB(40, 40, 50)
-ClearCaches()
-ResetPagination()
-MarkDirty()
+	suggesterEnabled = not suggesterEnabled
+	suggesterBtn.Text = "Suggester: " .. (suggesterEnabled and "ON" or "OFF")
+	suggesterBtn.BackgroundColor3 = suggesterEnabled and Color3.fromRGB(0, 170, 80) or Color3.fromRGB(40, 40, 50)
+	ClearCaches()
+	currentPage = 1
+	uiDirty = true
 end)
 
-local trapModeBtn = MakeButton("Trap Mode: OFF")
+local trapModeBtn = Instance.new("TextButton")
+trapModeBtn.Size = UDim2.new(1, 0, 0, 34)
+trapModeBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+trapModeBtn.BorderSizePixel = 0
+trapModeBtn.TextColor3 = Color3.new(1, 1, 1)
+trapModeBtn.Font = Enum.Font.GothamSemibold
+trapModeBtn.TextSize = 13
+trapModeBtn.Text = "Trap Mode: OFF"
+trapModeBtn.Parent = buttonFrame
+round(trapModeBtn, 8)
+
 trapModeBtn.MouseButton1Click:Connect(function()
-trapModeEnabled = not trapModeEnabled
-trapModeBtn.Text = "Trap Mode: " .. (trapModeEnabled and "ON" or "OFF")
-trapModeBtn.BackgroundColor3 = trapModeEnabled and Color3.fromRGB(220, 60, 60) or Color3.fromRGB(40, 40, 50)
-ClearCaches()
-ResetPagination()
-MarkDirty()
+	trapModeEnabled = not trapModeEnabled
+	trapModeBtn.Text = "Trap Mode: " .. (trapModeEnabled and "ON" or "OFF")
+	trapModeBtn.BackgroundColor3 = trapModeEnabled and Color3.fromRGB(220, 60, 60) or Color3.fromRGB(40, 40, 50)
+	ClearCaches()
+	currentPage = 1
+	uiDirty = true
 end)
 
 local pageButtonsFrame = Instance.new("Frame")
@@ -1448,210 +1382,192 @@ pageButtonsFrame.Size = UDim2.new(1, 0, 0, 28)
 pageButtonsFrame.BackgroundTransparency = 1
 pageButtonsFrame.Parent = buttonFrame
 
-local prevPageBtn = MakeButton("Prev")
-prevPageBtn.Size = UDim2.new(0.48, 0, 0, 28)
+local prevPageBtn = Instance.new("TextButton")
+prevPageBtn.Size = UDim2.new(0.48, 0, 1, 0)
+prevPageBtn.Text = "Prev"
+prevPageBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+prevPageBtn.BorderSizePixel = 0
+prevPageBtn.TextColor3 = Color3.new(1, 1, 1)
 prevPageBtn.Font = Enum.Font.GothamSemibold
 prevPageBtn.TextSize = 12
-prevPageBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
 prevPageBtn.Parent = pageButtonsFrame
-prevPageBtn.Position = UDim2.new(0, 0, 0, 0)
+round(prevPageBtn, 6)
 
-local nextPageBtn = MakeButton("Next")
-nextPageBtn.Size = UDim2.new(0.48, 0, 0, 28)
+local nextPageBtn = Instance.new("TextButton")
+nextPageBtn.Size = UDim2.new(0.48, 0, 1, 0)
+nextPageBtn.Position = UDim2.new(0.52, 0, 0, 0)
+nextPageBtn.Text = "Next"
+nextPageBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+nextPageBtn.BorderSizePixel = 0
+nextPageBtn.TextColor3 = Color3.new(1, 1, 1)
 nextPageBtn.Font = Enum.Font.GothamSemibold
 nextPageBtn.TextSize = 12
-nextPageBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
 nextPageBtn.Parent = pageButtonsFrame
-nextPageBtn.Position = UDim2.new(0.52, 0, 0, 0)
+round(nextPageBtn, 6)
 
 prevPageBtn.MouseButton1Click:Connect(function()
-StepPage(-1)
+	StepPage(-1)
 end)
-
 nextPageBtn.MouseButton1Click:Connect(function()
-StepPage(1)
+	StepPage(1)
 end)
 
-local settingsToggleBtn = MakeButton("Settings")
+local settingsToggleBtn = Instance.new("TextButton")
+settingsToggleBtn.Size = UDim2.new(1, 0, 0, 34)
+settingsToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+settingsToggleBtn.BorderSizePixel = 0
+settingsToggleBtn.TextColor3 = Color3.new(1, 1, 1)
+settingsToggleBtn.Font = Enum.Font.GothamSemibold
+settingsToggleBtn.TextSize = 13
+settingsToggleBtn.Text = "Settings"
+settingsToggleBtn.Parent = buttonFrame
+round(settingsToggleBtn, 8)
+
 settingsToggleBtn.MouseButton1Click:Connect(function()
-settingsFrame.Visible = not settingsFrame.Visible
+	settingsFrame.Visible = not settingsFrame.Visible
 end)
 
 local function RenderSearch(query)
-local data = SearchWords(query, searchMode)
-local totalPages = GetPageCount(data.normal, data.custom, pageSize)
-if currentPage > totalPages then
-currentPage = totalPages
-end
-if currentPage < 1 then
-currentPage = 1
-end
+	local data = SearchWords(query, searchMode)
+	local totalPages = GetPageCount(data.normal, data.custom, pageSize)
+	currentPage = math.clamp(currentPage, 1, totalPages)
+	local pageNormal = SlicePage(data.normal, currentPage, pageSize)
+	local pageCustom = SlicePage(data.custom, currentPage, pageSize)
 
-local pageNormal = SlicePage(data.normal, currentPage, pageSize)  
-local pageCustom = SlicePage(data.custom, currentPage, pageSize)  
+	RemoveResultChildren()
+	MakeHeader("Search (" .. searchMode:upper() .. "): " .. query .. " | Page " .. currentPage .. "/" .. totalPages)
 
-RemoveResultChildren()  
-MakeHeader("Search (" .. searchMode:upper() .. "): " .. query .. " | Page " .. currentPage .. "/" .. totalPages)  
+	local customEntries, normalEntries = {}, {}
+	for _, word in ipairs(pageCustom) do customEntries[#customEntries + 1] = { display = word, value = word } end
+	for _, word in ipairs(pageNormal) do normalEntries[#normalEntries + 1] = { display = word, value = word } end
 
-local customEntries = {}  
-for _, word in ipairs(pageCustom) do  
-	table.insert(customEntries, { display = word, value = word })  
-end  
-
-local normalEntries = {}  
-for _, word in ipairs(pageNormal) do  
-	table.insert(normalEntries, { display = word, value = word })  
-end  
-
-if #customEntries > 0 then  
-	BuildSectionItems("Custom Words:", customEntries, "")  
-end  
-
-BuildSectionItems("Results:", normalEntries, "No matches")
-
+	if #customEntries > 0 then
+		BuildSectionItems("Custom Words:", customEntries, "")
+	end
+	BuildSectionItems("Results:", normalEntries, "No matches")
 end
 
 local function RenderPrefix(prefix)
-local totalPages = 1
-local suggesterData = nil
-local trapData = nil
+	local totalPages, suggesterData, trapData = 1, nil, nil
 
-if suggesterEnabled then  
-	suggesterData = GetSuggestions(prefix)  
-	totalPages = math.max(totalPages, GetPageCount(suggesterData.normal, suggesterData.custom, pageSize))  
-end  
+	if suggesterEnabled then
+		suggesterData = GetSuggestions(prefix)
+		totalPages = math.max(totalPages, GetPageCount(suggesterData.normal, suggesterData.custom, pageSize))
+	end
+	if trapModeEnabled then
+		trapData = FindTraps(prefix)
+		totalPages = math.max(totalPages, GetPageCount(trapData.normal, trapData.custom, pageSize))
+	end
 
-if trapModeEnabled then  
-	trapData = FindTraps(prefix)  
-	totalPages = math.max(totalPages, GetPageCount(trapData.normal, trapData.custom, pageSize))  
-end  
+	currentPage = math.clamp(currentPage, 1, totalPages)
+	RemoveResultChildren()
+	MakeHeader("Prefix: " .. prefix:upper() .. " | Page " .. currentPage .. "/" .. totalPages)
 
-if currentPage > totalPages then  
-	currentPage = totalPages  
-end  
-if currentPage < 1 then  
-	currentPage = 1  
-end  
+	if suggesterEnabled and suggesterData then
+		local pageNormal = SlicePage(suggesterData.normal, currentPage, pageSize)
+		local pageCustom = SlicePage(suggesterData.custom, currentPage, pageSize)
+		local customEntries, normalEntries = {}, {}
+		for _, word in ipairs(pageCustom) do customEntries[#customEntries + 1] = { display = word, value = word } end
+		for _, word in ipairs(pageNormal) do normalEntries[#normalEntries + 1] = { display = word, value = word } end
+		if #customEntries > 0 then
+			BuildSectionItems("Custom Words:", customEntries, "")
+		end
+		BuildSectionItems("Suggestions:", normalEntries, "No matches")
+	end
 
-RemoveResultChildren()  
-MakeHeader("Prefix: " .. prefix:upper() .. " | Page " .. currentPage .. "/" .. totalPages)  
+	if trapModeEnabled and trapData then
+		local pageNormal = SlicePage(trapData.normal, currentPage, pageSize)
+		local pageCustom = SlicePage(trapData.custom, currentPage, pageSize)
+		local customEntries, normalEntries = {}, {}
+		for _, text in ipairs(pageCustom) do
+			local word = text:match("^(.-)%s*%-%>%s*trap:")
+			customEntries[#customEntries + 1] = { display = text, value = word or text }
+		end
+		for _, text in ipairs(pageNormal) do
+			local word = text:match("^(.-)%s*%-%>%s*trap:")
+			normalEntries[#normalEntries + 1] = { display = text, value = word or text }
+		end
+		if #customEntries > 0 then
+			BuildSectionItems("Custom Words:", customEntries, "")
+		end
+		BuildSectionItems("Traps:", normalEntries, "No traps")
+	end
 
-if suggesterEnabled and suggesterData then  
-	local pageNormal = SlicePage(suggesterData.normal, currentPage, pageSize)  
-	local pageCustom = SlicePage(suggesterData.custom, currentPage, pageSize)  
-
-	local customEntries = {}  
-	for _, word in ipairs(pageCustom) do  
-		table.insert(customEntries, { display = word, value = word })  
-	end  
-
-	local normalEntries = {}  
-	for _, word in ipairs(pageNormal) do  
-		table.insert(normalEntries, { display = word, value = word })  
-	end  
-
-	if #customEntries > 0 then  
-		BuildSectionItems("Custom Words:", customEntries, "")  
-	end  
-
-	BuildSectionItems("Suggestions:", normalEntries, "No matches")  
-end  
-
-if trapModeEnabled and trapData then  
-	local pageNormal = SlicePage(trapData.normal, currentPage, pageSize)  
-	local pageCustom = SlicePage(trapData.custom, currentPage, pageSize)  
-
-	local customEntries = {}  
-	for _, text in ipairs(pageCustom) do  
-		local word = text:match("^(.-)%s*%-%>%s*trap:")  
-		table.insert(customEntries, { display = text, value = word or text })  
-	end  
-
-	local normalEntries = {}  
-	for _, text in ipairs(pageNormal) do  
-		local word = text:match("^(.-)%s*%-%>%s*trap:")  
-		table.insert(normalEntries, { display = text, value = word or text })  
-	end  
-
-	if #customEntries > 0 then  
-		BuildSectionItems("Custom Words:", customEntries, "")  
-	end  
-
-	BuildSectionItems("Traps:", normalEntries, "No traps")  
-end  
-
-if not suggesterEnabled and not trapModeEnabled then  
-	MakeEmpty("Turn Suggester or Trap Mode ON")  
+	if not suggesterEnabled and not trapModeEnabled then
+		MakeEmpty("Turn Suggester or Trap Mode ON")
+	end
 end
 
-end
-
-local lastPrefix = ""
-local lastSearch = ""
-local lastSearchMode = ""
-local lastPriority = ""
-local lastRenderedKey = ""
-local lastUpdate = 0
-
+local lastPrefix, lastRenderedKey, lastUpdate = "", "", 0
 RunService.Heartbeat:Connect(function()
-local now = tick()
-if now - lastUpdate < 0.12 then
-return
-end
-lastUpdate = now
+	local now = tick()
+	if now - lastUpdate < 0.12 then
+		return
+	end
+	lastUpdate = now
 
-local query = searchBox.Text:gsub("^%s+", ""):gsub("%s+$", ""):lower()  
-if query ~= "" then  
-	local key = "search|" .. query .. "|" .. searchMode .. "|" .. lengthPriority .. "|" .. tostring(currentPage)  
-	if key == lastRenderedKey and not uiDirty then  
-		return  
-	end  
-	RenderSearch(query)  
-	lastRenderedKey = key  
-	lastSearch = query  
-	lastSearchMode = searchMode  
-	lastPriority = lengthPriority  
-	lastSearchActive = true  
-	uiDirty = false  
-	return  
-end  
+	local query = searchBox.Text:gsub("^%s+", ""):gsub("%s+$", ""):lower()
+	local currentWord = GetCurrentPrefix()
 
-if lastSearchActive then  
-	currentPage = 1  
-end  
-lastSearchActive = false  
+	if query ~= "" then
+		local key = "search|" .. query .. "|" .. currentWord .. "|" .. searchMode .. "|" .. lengthPriority .. "|" .. tostring(currentPage) .. "|" .. tostring(suggesterEnabled) .. "|" .. tostring(trapModeEnabled)
+		if key == lastRenderedKey and not uiDirty then
+			return
+		end
+		RenderSearch(query)
+		lastRenderedKey = key
+		lastSearchActive = true
+		uiDirty = false
+		return
+	end
 
-local prefix = GetCurrentPrefix()  
-if prefix == "" then  
-	local key = "empty"  
-	if key ~= lastRenderedKey then  
-		RemoveResultChildren()  
-		MakeEmpty("Turn Suggester or Trap Mode ON")  
-		lastRenderedKey = key  
-	end  
-	uiDirty = false  
-	lastPrefix = ""  
-	return  
-end  
+	if lastSearchActive then
+		currentPage = 1
+	end
+	lastSearchActive = false
 
-if prefix ~= lastPrefix then  
-	currentPage = 1  
-end  
+	if currentWord == "" then
+		if lastRenderedKey ~= "empty" then
+			RemoveResultChildren()
+			MakeEmpty("Turn Suggester or Trap Mode ON")
+			lastRenderedKey = "empty"
+		end
+		uiDirty = false
+		lastPrefix = ""
+		return
+	end
 
-local key = "prefix|" .. prefix .. "|" .. tostring(currentPage) .. "|" .. tostring(suggesterEnabled) .. "|" .. tostring(trapModeEnabled) .. "|" .. searchMode .. "|" .. lengthPriority  
-if key == lastRenderedKey and not uiDirty then  
-	return  
-end  
+	if currentWord ~= lastPrefix then
+		currentPage = 1
+	end
 
-RenderPrefix(prefix)  
+	local key = "prefix|" .. currentWord .. "|" .. tostring(currentPage) .. "|" .. tostring(suggesterEnabled) .. "|" .. tostring(trapModeEnabled) .. "|" .. searchMode .. "|" .. lengthPriority
+	if key == lastRenderedKey and not uiDirty then
+		return
+	end
 
-lastRenderedKey = key  
-lastPrefix = prefix  
-lastSearch = ""  
-lastSearchMode = searchMode  
-lastPriority = lengthPriority  
-uiDirty = false
+	RenderPrefix(currentWord)
+	lastRenderedKey = key
+	lastPrefix = currentWord
+	uiDirty = false
+end)
 
+task.spawn(function()
+	while task.wait(0.25) do
+		if AutoPlayEnabled and not typingLock and not isTyping and IsAutoPlayTurn() then
+			local prefix = GetCurrentPrefix()
+			if prefix ~= "" and prefix ~= lastAutoPrefix then
+				local chosen = PickAutoPlayWord(prefix)
+				if chosen and chosen ~= "" and chosen ~= lastAutoChosen then
+					lastAutoPrefix = prefix
+					lastAutoChosen = chosen
+					TypeWordAutoPlay(chosen)
+				end
+			end
+		else
+			lastAutoPrefix = ""
+		end
+	end
 end)
 
 print("Last Letter GUI loaded")
