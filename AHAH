@@ -666,10 +666,10 @@ local function GetActivePageCount()
 	return totalPages
 end
 
-local function PressKeyCode(keyCode)
+local function PressKeyCode(keyCode, holdTime)
 	pcall(function()
 		VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
-		task.wait(0.03)
+		task.wait(holdTime or 0.03)
 		VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
 	end)
 end
@@ -680,8 +680,8 @@ end
 
 local function PressBackspaceTimes(count)
 	for _ = 1, math.max(0, count) do
-		PressKeyCode(Enum.KeyCode.Backspace)
-		task.wait(0.02)
+		PressKeyCode(Enum.KeyCode.Backspace, 0.012)
+		task.wait(0.01)
 	end
 end
 
@@ -719,6 +719,116 @@ local function FindKeyObject(char)
 		end
 	end
 	return nil
+end
+
+local function GetTypingProfile()
+	local low = math.max(0, tonumber(minDelay) or 0)
+	local high = math.max(low, tonumber(maxDelay) or low)
+	local averageDelay = (low + high) * 0.5
+
+	local speed
+	if averageDelay <= 0.04 then
+		speed = 1
+	elseif averageDelay <= 0.08 then
+		speed = 0.86
+	elseif averageDelay <= 0.12 then
+		speed = 0.7
+	elseif averageDelay <= 0.18 then
+		speed = 0.5
+	elseif averageDelay <= 0.26 then
+		speed = 0.34
+	else
+		speed = 0.22
+	end
+
+	local burstMin
+	local burstMax
+	if speed >= 0.8 then
+		burstMin = 2
+		burstMax = 5
+	elseif speed >= 0.55 then
+		burstMin = 1
+		burstMax = 3
+	else
+		burstMin = 1
+		burstMax = 2
+	end
+
+	local innerMin = 0.03 + ((1 - speed) * 0.07)
+	local innerMax = 0.07 + ((1 - speed) * 0.11)
+	local pauseMin = 0.04 + ((1 - speed) * 0.09)
+	local pauseMax = 0.09 + ((1 - speed) * 0.14)
+
+	return {
+		speed = speed,
+		innerMin = innerMin,
+		innerMax = innerMax,
+		burstMin = burstMin,
+		burstMax = burstMax,
+		pauseMin = pauseMin,
+		pauseMax = pauseMax
+	}
+end
+
+local function GetBurstDelay(profile, index, total)
+	local progress = total > 0 and (index / total) or 1
+	local delay = profile.innerMin + (math.random() * math.max(0, profile.innerMax - profile.innerMin))
+
+	if profile.speed >= 0.8 then
+		delay = delay * 0.35
+	elseif profile.speed >= 0.55 then
+		delay = delay * 0.6
+	else
+		delay = delay * 0.9
+	end
+
+	if progress < 0.15 then
+		delay = delay + 0.012
+	elseif progress > 0.85 then
+		delay = delay + 0.01
+	end
+
+	if math.random() < (0.02 + (profile.speed * 0.04)) then
+		delay = delay + math.random(1, 5) / 1000
+	end
+
+	return math.max(0.001, delay)
+end
+
+local function GetBurstPause(profile)
+	return math.max(0.01, profile.pauseMin + (math.random() * math.max(0, profile.pauseMax - profile.pauseMin)))
+end
+
+local function TypeRemainingText(remaining)
+	local profile = GetTypingProfile()
+	local index = 1
+
+	while index <= #remaining do
+		local remainingCount = #remaining - index + 1
+		local burstMax = math.min(profile.burstMax, remainingCount)
+		local burstMin = math.min(profile.burstMin, burstMax)
+		local burstSize = math.random(burstMin, burstMax)
+
+		for j = 1, burstSize do
+			local char = remaining:sub(index, index)
+			if char:match("%a") then
+				local keyObj = FindKeyObject(char)
+				if keyObj then
+					FireKeyObject(keyObj)
+				end
+			end
+
+			index += 1
+
+			if index <= #remaining and j < burstSize then
+				task.wait(GetBurstDelay(profile, index, #remaining))
+			end
+		end
+
+		if index <= #remaining then
+			task.wait(GetBurstPause(profile))
+		end
+	end
 end
 
 local function reactionDelay()
@@ -890,40 +1000,10 @@ local function TypeWordAutoPlay(word)
 				return
 			end
 
-			local function GetHumanDelay(i, total)
-				local base = math.random() * (maxDelay - minDelay) + minDelay
-				local delay = base
-				if minDelay >= 0.05 and maxDelay <= 0.09 then
-					delay = delay + (math.random() - 0.5) * 0.015
-				else
-					if i / total < 0.2 then
-						delay = delay + 0.04
-					elseif i / total > 0.8 then
-						delay = delay + 0.03
-					end
-					delay = delay + (math.random() - 0.5) * 0.03
-				end
-				if math.random() < 0.08 then
-					delay = delay + math.random(12, 28) / 100
-				end
-				if math.random() < 0.15 then
-					delay = delay + math.random(5, 10) / 100
-				end
-				return math.clamp(delay, minDelay, maxDelay + 0.3)
-			end
+			TypeRemainingText(remaining)
 
-			for i = 1, #remaining do
-				local char = remaining:sub(i, i)
-				if char:match("%a") then
-					local keyObj = FindKeyObject(char)
-					if keyObj then
-						FireKeyObject(keyObj)
-					end
-				end
-				task.wait(GetHumanDelay(i, #remaining))
-			end
-
-			task.wait(GetHumanDelay(#remaining, #remaining) + math.random(5, 15) / 100)
+			local profile = GetTypingProfile()
+			task.wait(GetBurstPause(profile))
 			PressEnter()
 
 			local verifyStart = tick()
@@ -971,24 +1051,12 @@ local function TypeWordFromButton(word)
 		end
 
 		local remaining = fullWord:sub(startIndex)
-		local function GetButtonDelay()
-			return math.random() * (maxDelay - minDelay) + minDelay
+		if #remaining > 0 then
+			TypeRemainingText(remaining)
 		end
 
-		for i = 1, #remaining do
-			local char = remaining:sub(i, i)
-			if char:match("%a") then
-				local keyObj = FindKeyObject(char)
-				if keyObj then
-					FireKeyObject(keyObj)
-				end
-			end
-			if i < #remaining then
-				task.wait(GetButtonDelay())
-			end
-		end
-
-		task.wait(GetButtonDelay())
+		local profile = GetTypingProfile()
+		task.wait(GetBurstPause(profile))
 		PressEnter()
 		typingLock = false
 	end)
